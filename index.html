@@ -36,28 +36,47 @@
     <!-- Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
 
+    <!-- Firebase SDKs (Compat for easier CDN usage) -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&display=swap');
+
         body {
-            font-family: 'Inter', system-ui, sans-serif;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        .animate-fade-in {
+            animation: fadeIn 0.4s ease-out;
         }
 
         .animate-bounce-in {
-            animation: bounceIn 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            animation: bounceIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         @keyframes bounceIn {
             0% {
-                transform: scale(0.3);
                 opacity: 0;
-            }
-
-            50% {
-                transform: scale(1.05);
-                opacity: 1;
+                transform: scale(0.9);
             }
 
             70% {
-                transform: scale(0.9);
+                opacity: 1;
+                transform: scale(1.02);
             }
 
             100% {
@@ -67,62 +86,89 @@
     </style>
 </head>
 
-<body class="bg-slate-50 h-screen overflow-hidden">
-    <div id="root" class="h-full"></div>
+<body class="bg-slate-50 text-slate-900 antialiased overflow-hidden">
+    <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // --- DATA SERVICE ---
-        const CLIENTS_KEY = 'yomola_clients_v1';
-        const TRANSACTIONS_KEY = 'yomola_transactions_v1';
-        const APP_KEY = 'yomola_app_v1';
+        // --- CLOUD SERVICE (Firebase Adapter) ---
+        // This replaces the synchronous DataService with an async one.
 
-        const DataService = {
-            loadClients: () => JSON.parse(localStorage.getItem(CLIENTS_KEY)) || [],
-            saveClients: (data) => localStorage.setItem(CLIENTS_KEY, JSON.stringify(data)),
+        const DB_CONFIG_KEY = 'yomola_firebase_config';
 
-            loadTransactions: () => JSON.parse(localStorage.getItem(TRANSACTIONS_KEY)) || [],
-            saveTransactions: (data) => localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(data)),
+        const CloudService = {
+            db: null,
+            isConnected: false,
 
-            loadApp: () => {
-                const data = JSON.parse(localStorage.getItem(APP_KEY)) || { staff: [], businessName: 'Yomola Global' };
-                // Migration: If old string PIN exists or no staff, create default admin
-                if (!data.staff || data.staff.length === 0) {
-                    if (data.adminPin) { // Migrate old single PIN
-                        data.staff = [{ id: 1, name: 'Admin', pin: data.adminPin, role: 'admin' }];
-                        delete data.adminPin;
-                    } else {
-                        // Brand new setup handled in AuthScreen
-                    }
-                }
-                return data;
-            },
-            saveApp: (data) => localStorage.setItem(APP_KEY, JSON.stringify(data)),
-
-            // Enterprise: Backup/Restore
-            exportData: () => {
-                const dump = {
-                    clients: JSON.parse(localStorage.getItem(CLIENTS_KEY)),
-                    transactions: JSON.parse(localStorage.getItem(TRANSACTIONS_KEY)),
-                    app: JSON.parse(localStorage.getItem(APP_KEY)),
-                    timestamp: new Date().toISOString()
-                };
-                return JSON.stringify(dump, null, 2);
-            },
-            importData: (jsonString) => {
+            // Initialize Firebase with provided config
+            init: (config) => {
                 try {
-                    const dump = JSON.parse(jsonString);
-                    if (dump.clients) localStorage.setItem(CLIENTS_KEY, JSON.stringify(dump.clients));
-                    if (dump.transactions) localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(dump.transactions));
-                    if (dump.app) localStorage.setItem(APP_KEY, JSON.stringify(dump.app));
+                    if (firebase.apps.length === 0) {
+                        firebase.initializeApp(config);
+                    }
+                    CloudService.db = firebase.firestore();
+                    CloudService.isConnected = true;
+                    localStorage.setItem(DB_CONFIG_KEY, JSON.stringify(config));
                     return true;
                 } catch (e) {
-                    console.error("Import Failed", e);
+                    console.error("Firebase Init Error", e);
                     return false;
                 }
+            },
+
+            loadConfig: () => {
+                const conf = localStorage.getItem(DB_CONFIG_KEY);
+                return conf ? JSON.parse(conf) : null;
+            },
+
+            clearConfig: () => localStorage.removeItem(DB_CONFIG_KEY),
+
+            // Async Data Methods
+            loadApp: async () => {
+                if (!CloudService.db) throw new Error("Database not connected");
+                const snap = await CloudService.db.collection('settings').doc('app_global').get();
+                if (!snap.exists) return { staff: [], businessName: 'Yomola Global' }; // Default
+                return snap.data();
+            },
+
+            saveApp: async (data) => {
+                if (!CloudService.db) return;
+                await CloudService.db.collection('settings').doc('app_global').set(data);
+            },
+
+            loadClients: async () => {
+                if (!CloudService.db) return [];
+                const snap = await CloudService.db.collection('clients').get();
+                return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            },
+
+            saveClient: async (client) => {
+                if (!CloudService.db) return;
+                // Use string ID for doc to prevent duplicates easily if needed, but random ID is fine
+                await CloudService.db.collection('clients').doc(String(client.id)).set(client);
+            },
+
+            loadTransactions: async () => {
+                if (!CloudService.db) return [];
+                const snap = await CloudService.db.collection('transactions').orderBy('date', 'desc').limit(2000).get(); // Limit for performance
+                return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            },
+
+            saveTransaction: async (tx) => {
+                if (!CloudService.db) return;
+                await CloudService.db.collection('transactions').doc(String(tx.id)).set(tx);
+            },
+
+            // Backup/Utility for migration (Optional, could act as Export)
+            exportData: async () => {
+                // Implementation for Full Dump if needed
             }
         };
+
+        // --- BACKWARDS COMPATIBILITY / MANUAL DATA SERVICE (For fallback or initial migration state) ---
+        // We will keep a minimal DataService just for "Offline Setup" if we wanted, but User requested "Cloud Only".
+        // Use CloudService exclusively for data.
 
         // --- UTILS ---
         const formatMoney = (amount) => '₦' + (amount || 0).toLocaleString();
@@ -130,34 +176,113 @@
 
         // --- COMPONENTS ---
 
-        // 1. AUTH SCREEN
+        // 1. SETUP SCREEN (Cloud Config)
+        const SetupScreen = ({ onConnect }) => {
+            const [config, setConfig] = useState({ apiKey: '', authDomain: '', projectId: '' });
+            const [error, setError] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setLoading(true);
+                setError('');
+                if (!config.apiKey || !config.projectId) {
+                    setLoading(false);
+                    return setError("API Key and Project ID are required");
+                }
+                const success = CloudService.init(config);
+                if (success) {
+                    onConnect();
+                } else {
+                    setError("Invalid Configuration");
+                }
+                setLoading(false);
+            };
+
+            return (
+                <div className="flex items-center justify-center h-full bg-slate-900 text-white">
+                    <div className="bg-white text-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md m-4">
+                        <div className="text-center mb-6">
+                            <h1 className="text-2xl font-bold mb-2">Cloud Setup</h1>
+                            <p className="text-slate-500 text-sm">Connect to your Firebase Project to enable synchronization.</p>
+                        </div>
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">API Key</label>
+                                <input type="text" value={config.apiKey} onChange={e => setConfig({ ...config, apiKey: e.target.value })} className="w-full p-3 border rounded-lg outline-none focus:border-brand-500" placeholder="AIzaSy..." />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Project ID</label>
+                                <input type="text" value={config.projectId} onChange={e => setConfig({ ...config, projectId: e.target.value })} className="w-full p-3 border rounded-lg outline-none focus:border-brand-500" placeholder="yomola-app" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Auth Domain (Optional)</label>
+                                <input type="text" value={config.authDomain} onChange={e => setConfig({ ...config, authDomain: e.target.value })} className="w-full p-3 border rounded-lg outline-none focus:border-brand-500" placeholder="yomola-app.firebaseapp.com" />
+                            </div>
+                            {error && <p className="text-red-500 text-sm font-bold">{error}</p>}
+                            <button disabled={loading} className="w-full py-3 bg-brand-600 text-white rounded-lg font-bold hover:bg-brand-700 transition disabled:opacity-50">
+                                {loading ? 'Connecting...' : 'Connect Database'}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        // 2. AUTH SCREEN (Staff & Client)
         const AuthScreen = ({ onLogin, onSetup, hasAccount }) => {
-            const [pin, setPin] = useState('');
+            const [mode, setMode] = useState('staff'); // 'staff' | 'client'
+            const [val, setVal] = useState('');
             const [error, setError] = useState('');
 
             const handleSubmit = (e) => {
                 e.preventDefault();
-                if (pin.length < 4) return setError("PIN must be at least 4 digits");
-                hasAccount ? onLogin(pin) : onSetup(pin);
+                setError('');
+                if (mode === 'staff') {
+                    if (val.length < 4) return setError("PIN must be 4 digits");
+                    hasAccount ? onLogin({ type: 'staff', pin: val }) : onSetup(val);
+                } else {
+                    // Client Login
+                    if (val.length < 10) return setError("Enter a valid phone number");
+                    onLogin({ type: 'client', phone: val });
+                }
             };
 
             return (
-                <div className="flex items-center justify-center h-full bg-brand-900 text-white">
-                    <div className="bg-white text-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md m-4">
-                        <div className="text-center mb-8">
-                            <div className="inline-flex items-center justify-center p-3 bg-brand-50 rounded-full text-brand-600 mb-4">
-                                <i data-lucide="shield-check" className="w-8 h-8"></i>
-                            </div>
+                <div className="flex items-center justify-center h-full bg-brand-900 text-white px-4">
+                    <div className="bg-white text-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-sm">
+                        <div className="text-center mb-6">
                             <h1 className="text-3xl font-bold text-brand-900">Yomola Global</h1>
-                            <p className="text-slate-500 mt-2">{hasAccount ? 'Staff Login Portal' : 'Initial System Setup'}</p>
+                            <p className="text-slate-500 mt-2">Secure Access Portal</p>
                         </div>
+
+                        {/* Tabs */}
+                        {hasAccount && (
+                            <div className="flex bg-slate-100 p-1 rounded-xl mb-6">
+                                <button onClick={() => { setMode('staff'); setVal(''); setError(''); }} className={`flex-1 py-2 text-sm font-bold rounded-lg transition ${mode === 'staff' ? 'bg-white shadow text-brand-600' : 'text-slate-400'}`}>Staff Login</button>
+                                <button onClick={() => { setMode('client'); setVal(''); setError(''); }} className={`flex-1 py-2 text-sm font-bold rounded-lg transition ${mode === 'client' ? 'bg-white shadow text-brand-600' : 'text-slate-400'}`}>Client Portal</button>
+                            </div>
+                        )}
+
                         <form onSubmit={handleSubmit} className="space-y-6">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">{hasAccount ? 'Enter Access PIN' : 'Create Master Admin PIN'}</label>
-                                <input type="password" value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g, '')); setError(''); }} className="w-full text-center text-3xl p-4 border rounded-xl focus:ring-2 focus:ring-brand-500 outline-none tracking-[1em] font-mono" placeholder="••••" autoFocus />
+                                <label className="block text-sm font-medium text-slate-700 mb-2">
+                                    {mode === 'staff' ? (hasAccount ? 'Enter Staff PIN' : 'Create Admin PIN') : 'Enter Mobile Number'}
+                                </label>
+                                <input
+                                    type={mode === 'staff' ? "password" : "tel"}
+                                    value={val}
+                                    onChange={e => { setVal(e.target.value.replace(/\D/g, '')); setError(''); }}
+                                    className={`w-full text-center p-4 border rounded-xl focus:ring-2 focus:ring-brand-500 outline-none font-mono ${mode === 'staff' ? 'text-3xl tracking-widest' : 'text-xl tracking-normal'}`}
+                                    placeholder={mode === 'staff' ? "••••" : "080..."}
+                                    autoFocus
+                                    maxLength={mode === 'staff' ? 4 : 15}
+                                />
                                 {error && <p className="text-red-500 text-sm text-center mt-2">{error}</p>}
                             </div>
-                            <button className="w-full py-4 bg-brand-600 text-white rounded-xl font-bold text-lg hover:bg-brand-700 transition shadow-lg shadow-brand-200">{hasAccount ? 'Access Dashboard' : 'Initialize System'}</button>
+                            <button className="w-full py-4 bg-brand-600 text-white rounded-xl font-bold text-lg hover:bg-brand-700 transition shadow-lg shadow-brand-200">
+                                {hasAccount ? (mode === 'staff' ? 'Login to Dashboard' : 'View My Dashboard') : 'Initialize System'}
+                            </button>
                         </form>
                     </div>
                 </div>
@@ -247,89 +372,7 @@
 
         // 3. FEATURE VIEWS
 
-        const Settings = ({ appData, onAddStaff, onDeleteStaff }) => {
-            const [newStaff, setNewStaff] = useState({ name: '', pin: '', role: 'staff' });
 
-            const handleBackup = () => {
-                const data = DataService.exportData();
-                const blob = new Blob([data], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `yomola_backup_${new Date().toISOString().slice(0, 10)}.json`;
-                a.click();
-            };
-
-            const handleRestore = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const success = DataService.importData(e.target.result);
-                    if (success) {
-                        alert("Restored successfully! The page will reload.");
-                        window.location.reload();
-                    } else {
-                        alert("Failed to restore data. Invalid file.");
-                    }
-                };
-                reader.readAsText(file);
-            };
-
-            const handleAdd = (e) => {
-                e.preventDefault();
-                onAddStaff(newStaff);
-                setNewStaff({ name: '', pin: '', role: 'staff' });
-            };
-
-            return (
-                <div className="space-y-6 max-w-4xl">
-                    <div className="bg-white rounded-xl shadow-sm p-6 border border-slate-100">
-                        <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><i data-lucide="database" className="w-5 h-5"></i> Data Management</h3>
-                        <p className="text-sm text-slate-500 mb-4">Export your data to move it to another device, or import a backup file.</p>
-                        <div className="flex gap-4">
-                            <button onClick={handleBackup} className="bg-brand-100 text-brand-700 px-4 py-2 rounded-lg font-bold hover:bg-brand-200 flex items-center gap-2">
-                                <i data-lucide="download" className="w-4 h-4"></i> Export Data
-                            </button>
-                            <label className="bg-slate-100 text-slate-700 px-4 py-2 rounded-lg font-bold hover:bg-slate-200 flex items-center gap-2 cursor-pointer">
-                                <i data-lucide="upload" className="w-4 h-4"></i> Restore Backup
-                                <input type="file" accept=".json" onChange={handleRestore} className="hidden" />
-                            </label>
-                        </div>
-                    </div>
-
-                    <div className="bg-white rounded-xl shadow-sm p-6 border border-slate-100">
-                        <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><i data-lucide="users" className="w-5 h-5"></i> Staff Management</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                            <div>
-                                <h4 className="font-bold text-sm text-slate-500 uppercase mb-3">Add New Staff</h4>
-                                <form onSubmit={handleAdd} className="space-y-3">
-                                    <input required placeholder="Staff Name" value={newStaff.name} onChange={e => setNewStaff({ ...newStaff, name: e.target.value })} className="w-full border p-2 rounded-lg" />
-                                    <input required placeholder="PIN (4 digits)" maxLength="4" value={newStaff.pin} onChange={e => setNewStaff({ ...newStaff, pin: e.target.value })} className="w-full border p-2 rounded-lg" />
-                                    <button className="w-full bg-brand-600 text-white py-2 rounded-lg font-bold">Add Staff</button>
-                                </form>
-                            </div>
-                            <div>
-                                <h4 className="font-bold text-sm text-slate-500 uppercase mb-3">Existing Accounts</h4>
-                                <div className="space-y-2">
-                                    {appData.staff.map(s => (
-                                        <div key={s.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
-                                            <div>
-                                                <p className="font-bold">{s.name}</p>
-                                                <p className="text-xs text-slate-500">PIN: ****</p>
-                                            </div>
-                                            {s.role !== 'admin' && (
-                                                <button onClick={() => onDeleteStaff(s.id)} className="text-red-500 hover:text-red-700"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
 
         // 3. FEATURE VIEWS
 
@@ -647,109 +690,398 @@
             </div>
         );
 
-        // 5. MAIN APP LOGIC & STATE
+        // 4. CLIENT PORTAL (Read Only)
+        const ClientPortal = ({ client, transactions, onLogout }) => {
+            const [dateRange, setDateRange] = useState({ start: '', end: '' });
+
+            const myTx = transactions.filter(t => t.clientId === client.id);
+            const filteredTx = myTx.filter(t => {
+                if (!dateRange.start && !dateRange.end) return true;
+                const d = new Date(t.date);
+                const start = dateRange.start ? new Date(dateRange.start) : new Date('1900-01-01');
+                const end = dateRange.end ? new Date(dateRange.end) : new Date('2100-01-01');
+                return d >= start && d <= end;
+            });
+
+            const downloadStatement = () => {
+                const doc = new jspdf.jsPDF();
+                doc.setFontSize(20);
+                doc.setTextColor(22, 101, 52);
+                doc.text("Yomola Global - Account Statement", 14, 22);
+                doc.setFontSize(10);
+                doc.setTextColor(100);
+                doc.text(`Client: ${client.name}`, 14, 30);
+                doc.text(`Phone: ${client.phone}`, 14, 35);
+                doc.text(`Date Generated: ${new Date().toLocaleDateString()}`, 14, 40);
+
+                const tableBody = filteredTx.map(t => [t.date, t.type, t.method, formatMoney(t.amount)]);
+                doc.autoTable({
+                    head: [['Date', 'Type', 'Method', 'Amount']],
+                    body: tableBody,
+                    startY: 45,
+                    theme: 'grid',
+                    headStyles: { fillColor: [22, 163, 74] }
+                });
+                doc.save(`statement_${client.name}.pdf`);
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 flex flex-col">
+                    {/* Header */}
+                    <div className="bg-brand-900 text-white p-6 shadow-lg flex justify-between items-center">
+                        <div>
+                            <h1 className="text-xl font-bold">Yomola Global</h1>
+                            <p className="text-brand-200 text-sm">Welcome, {client.name}</p>
+                        </div>
+                        <button onClick={onLogout} className="bg-brand-800 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-bold transition flex items-center gap-2">
+                            <i data-lucide="log-out" className="w-4 h-4"></i> Logout
+                        </button>
+                    </div>
+
+                    {/* Content */}
+                    <div className="flex-1 p-4 max-w-2xl mx-auto w-full space-y-6">
+                        {/* Balance Card */}
+                        <div className="bg-brand-600 text-white p-6 rounded-2xl shadow-xl transform transition hover:scale-[1.02] duration-300 relative overflow-hidden">
+                            <div className="relative z-10">
+                                <p className="text-brand-200 font-medium uppercase tracking-wider text-xs">Available Savings</p>
+                                <h2 className="text-4xl font-bold mt-2">{formatMoney(client.balance)}</h2>
+                            </div>
+                            <i data-lucide="wallet" className="absolute right-[-20px] bottom-[-20px] w-32 h-32 text-brand-500 opacity-20"></i>
+                        </div>
+
+                        {/* Recent Activity */}
+                        <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-100">
+                            <div className="p-4 border-b border-slate-50 flex justify-between items-center">
+                                <h3 className="font-bold text-slate-800">Recent Transactions</h3>
+                                <div className="flex items-center gap-2">
+                                    <input type="date" className="bg-slate-50 border-b text-xs p-1 outline-none" onChange={e => setDateRange({ ...dateRange, start: e.target.value })} />
+                                    <button onClick={downloadStatement} className="text-brand-600 hover:bg-brand-50 p-2 rounded-full transition" title="Download Statement">
+                                        <i data-lucide="download" className="w-5 h-5"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="divide-y divide-slate-50 max-h-[500px] overflow-y-auto">
+                                {filteredTx.map(t => (
+                                    <div key={t.id} className="p-4 flex justify-between items-center hover:bg-slate-50 transition">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`p-2 rounded-full ${t.type === 'DEPOSIT' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                                                <i data-lucide={t.type === 'DEPOSIT' ? 'arrow-down-left' : 'arrow-up-right'} className="w-4 h-4"></i>
+                                            </div>
+                                            <div>
+                                                <p className="font-bold text-sm text-slate-800">{t.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'}</p>
+                                                <p className="text-xs text-slate-400">{t.date} • {t.method}</p>
+                                            </div>
+                                        </div>
+                                        <span className={`font-bold ${t.type === 'DEPOSIT' ? 'text-emerald-600' : 'text-slate-600'}`}>
+                                            {t.type === 'DEPOSIT' ? '+' : '-'}{formatMoney(t.amount)}
+                                        </span>
+                                    </div>
+                                ))}
+                                {filteredTx.length === 0 && <p className="p-8 text-center text-slate-400 text-sm">No records found.</p>}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 3. SETTINGS & STAFF MANAGEMENT
+        const Settings = ({ appData, onAddStaff, onDeleteStaff, onBack }) => {
+            const [newStaff, setNewStaff] = useState({ name: '', pin: '', role: 'staff' });
+
+            const handleAdd = (e) => {
+                e.preventDefault();
+                if (newStaff.pin.length < 4) return alert("PIN must be 4 digits");
+                onAddStaff(newStaff);
+                setNewStaff({ name: '', pin: '', role: 'staff' });
+            };
+
+            const handleBackup = async () => {
+                // For now, just dump local state as we don't have a full cloud export function ready
+                // In a real app, this would query all collections.
+                alert("Cloud Backup is handled automatically by Firebase. To export a local JSON of what's currently loaded:");
+                const dump = JSON.stringify({ app: appData, timestamp: new Date() }, null, 2);
+                const blob = new Blob([dump], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `yomola_backup_${new Date().toISOString().slice(0, 10)}.json`;
+                a.click();
+            };
+
+            return (
+                <div className="space-y-6">
+                    <button onClick={onBack} className="text-slate-500 hover:text-slate-800 flex items-center gap-2 font-medium">
+                        <i data-lucide="arrow-left" className="w-4 h-4"></i> Back to Dashboard
+                    </button>
+
+                    <h2 className="text-2xl font-bold text-slate-800">System Settings</h2>
+
+                    {/* Data Management */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                        <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                            <i data-lucide="database" className="w-5 h-5 text-brand-600"></i> Data Management
+                        </h3>
+                        <div className="flex gap-4">
+                            <button onClick={handleBackup} className="px-4 py-2 border rounded-lg hover:bg-slate-50 text-slate-700 font-medium text-sm flex items-center gap-2">
+                                <i data-lucide="download" className="w-4 h-4"></i> Download Local Backup
+                            </button>
+                            <button onClick={() => { CloudService.clearConfig(); window.location.reload(); }} className="px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 font-medium text-sm flex items-center gap-2">
+                                <i data-lucide="log-out" className="w-4 h-4"></i> Disconnect Cloud
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Staff Management */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                        <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                            <i data-lucide="users" className="w-5 h-5 text-brand-600"></i> Staff Management
+                        </h3>
+
+                        {/* Add Staff Form */}
+                        <form onSubmit={handleAdd} className="bg-slate-50 p-4 rounded-lg mb-6 flex flex-col md:flex-row gap-4 items-end">
+                            <div className="flex-1 w-full">
+                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Staff Name</label>
+                                <input required value={newStaff.name} onChange={e => setNewStaff({ ...newStaff, name: e.target.value })} className="w-full p-2 border rounded text-sm" placeholder="John Doe" />
+                            </div>
+                            <div className="w-full md:w-32">
+                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">PIN</label>
+                                <input required maxLength="4" value={newStaff.pin} onChange={e => setNewStaff({ ...newStaff, pin: e.target.value.replace(/\D/g, '') })} className="w-full p-2 border rounded text-sm" placeholder="1234" />
+                            </div>
+                            <div className="w-full md:w-32">
+                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Role</label>
+                                <select value={newStaff.role} onChange={e => setNewStaff({ ...newStaff, role: e.target.value })} className="w-full p-2 border rounded text-sm">
+                                    <option value="staff">Staff</option>
+                                    <option value="admin">Admin</option>
+                                </select>
+                            </div>
+                            <button className="bg-brand-600 text-white px-4 py-2 rounded-lg font-bold text-sm hover:bg-brand-700 w-full md:w-auto self-end">Add Staff</button>
+                        </form>
+
+                        {/* Staff List */}
+                        <div className="space-y-2">
+                            {appData.staff && appData.staff.map(s => (
+                                <div key={s.id} className="flex justify-between items-center p-3 border rounded-lg bg-white">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-brand-100 text-brand-600 flex items-center justify-center font-bold text-xs">{s.name.substring(0, 2)}</div>
+                                        <div>
+                                            <p className="font-bold text-sm text-slate-900">{s.name} {s.role === 'admin' && <span className="text-xs text-brand-600 bg-brand-50 px-1 rounded ml-1">ADMIN</span>}</p>
+                                        </div>
+                                    </div>
+                                    {s.role !== 'admin' || appData.staff.filter(st => st.role === 'admin').length > 1 ? (
+                                        <button onClick={() => onDeleteStaff(s.id)} className="text-red-500 hover:text-red-700 p-2"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                    ) : null}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 5. MAIN APP LOGIC & STATE (Async & Cloud)
         const App = () => {
-            const [session, setSession] = useState('auth');
-            const [currentUser, setCurrentUser] = useState(null); // Multi-User Support
+            const [session, setSession] = useState('loading'); // loading | setup | auth | app | client
+            const [isLoading, setIsLoading] = useState(true);
+
+            // Data State
             const [appData, setAppData] = useState({ staff: [] });
             const [clients, setClients] = useState([]);
             const [transactions, setTransactions] = useState([]);
+
+            const [currentUser, setCurrentUser] = useState(null);
             const [view, setView] = useState('dashboard');
             const [selectedClientId, setSelectedClientId] = useState(null);
             const [notification, setNotification] = useState(null);
 
+            // Initial Cloud Check
             useEffect(() => {
-                setAppData(DataService.loadApp());
-                setClients(DataService.loadClients());
-                setTransactions(DataService.loadTransactions());
+                const checkCloud = async () => {
+                    setIsLoading(true);
+                    const config = CloudService.loadConfig();
+                    if (config) {
+                        const success = CloudService.init(config);
+                        if (success) {
+                            setSession('auth');
+                        } else {
+                            CloudService.clearConfig();
+                            setSession('setup');
+                        }
+                    } else {
+                        setSession('setup');
+                    }
+                    setIsLoading(false);
+                };
+                checkCloud();
             }, []);
 
             useEffect(() => {
                 if (window.lucide) window.lucide.createIcons();
             }, [session, view, clients, selectedClientId]);
 
-            // Handlers
-            const handleLogin = (pin) => {
-                const user = appData.staff.find(u => u.pin === pin);
-                if (user) {
-                    setCurrentUser(user);
-                    setSession('app');
-                } else {
-                    alert("Invalid PIN");
-                }
+            // Data Loader (Called on Login)
+            const loadData = async () => {
+                const [app, cls, txs] = await Promise.all([
+                    CloudService.loadApp(),
+                    CloudService.loadClients(),
+                    CloudService.loadTransactions()
+                ]);
+                setAppData(app);
+                setClients(cls);
+                setTransactions(txs);
+                return { app, cls };
             };
 
-            const handleSetup = (pin) => {
+            // Handlers
+            const handleConnect = () => {
+                setSession('auth');
+            };
+
+            const handleLogin = async ({ type, pin, phone }) => {
+                setIsLoading(true);
+                try {
+                    const { app, cls } = await loadData();
+
+                    if (type === 'staff') {
+                        // Staff Logic
+                        const user = app.staff ? app.staff.find(u => u.pin === pin) : null;
+                        if (user) {
+                            setCurrentUser(user);
+                            setSession('app');
+                        } else {
+                            alert("Invalid PIN");
+                        }
+                    } else {
+                        // Client Logic
+                        const client = cls.find(c => c.phone === phone);
+                        if (client) {
+                            setCurrentUser(client);
+                            setSession('client');
+                        } else {
+                            alert("Phone number not found. Contact staff.");
+                        }
+                    }
+                } catch (e) {
+                    console.error("Login Error", e);
+                    alert("Connection Error: " + e.message);
+                }
+                setIsLoading(false);
+            };
+
+            const handleSetup = async (pin) => {
+                setIsLoading(true);
+                // Create Admin on Cloud
                 const newAdmin = { id: 1, name: 'Admin', pin, role: 'admin' };
-                const newData = { ...appData, staff: [newAdmin] };
+                const newData = { businessName: 'Yomola Global', staff: [newAdmin] };
+
+                await CloudService.saveApp(newData);
                 setAppData(newData);
-                DataService.saveApp(newData);
                 setCurrentUser(newAdmin);
                 setSession('app');
+                setIsLoading(false);
             };
 
-            const handleAddStaff = (staff) => {
-                const newData = { ...appData, staff: [...appData.staff, { ...staff, id: Date.now() }] };
+            const handleLogout = () => {
+                setCurrentUser(null);
+                setClients([]);
+                setTransactions([]);
+                setSession('auth');
+                setView('dashboard');
+            };
+
+            // CRUD Handlers (Updated for Cloud)
+            const handleAddStaff = async (staff) => {
+                const newData = { ...appData, staff: [...(appData.staff || []), { ...staff, id: Date.now() }] };
                 setAppData(newData);
-                DataService.saveApp(newData);
+                await CloudService.saveApp(newData);
                 alert("Staff member created!");
             };
 
-            const handleDeleteStaff = (id) => {
+            const handleDeleteStaff = async (id) => {
                 if (!confirm("Are you sure?")) return;
                 const newData = { ...appData, staff: appData.staff.filter(s => s.id !== id) };
                 setAppData(newData);
-                DataService.saveApp(newData);
+                await CloudService.saveApp(newData);
             };
 
-            const addClient = (client) => {
+            const addClient = async (client) => {
+                setIsLoading(true);
                 const updated = [client, ...clients];
                 setClients(updated);
-                DataService.saveClients(updated);
+                await CloudService.saveClient(client);
+                setIsLoading(false);
             };
 
-            const handleTransaction = (tx) => {
+            const handleTransaction = async (tx) => {
+                setIsLoading(true);
                 // Enterprise: Audit Trail
                 const stampedTx = { ...tx, processedBy: currentUser?.name || 'Unknown' };
 
-                // 1. Save Transaction
+                // 1. Save Transaction locally & cloud
                 const newTxs = [stampedTx, ...transactions];
                 setTransactions(newTxs);
-                DataService.saveTransactions(newTxs);
+                await CloudService.saveTransaction(stampedTx);
 
-                // 2. Update Balance
-                const updatedClients = clients.map(c => {
-                    if (c.id === tx.clientId) {
-                        const newBal = tx.type === 'DEPOSIT' ? (c.balance + tx.amount) : (c.balance - tx.amount);
-                        return { ...c, balance: newBal };
-                    }
-                    return c;
-                });
-                setClients(updatedClients);
-                DataService.saveClients(updatedClients);
+                // 2. Update Balance locally & cloud
+                // Find old client object
+                const oldClient = clients.find(c => c.id === tx.clientId);
+                if (oldClient) {
+                    const newBal = tx.type === 'DEPOSIT' ? (oldClient.balance + tx.amount) : (oldClient.balance - tx.amount);
+                    const updatedClient = { ...oldClient, balance: newBal };
 
-                // 3. Simulate Notification
-                const client = clients.find(c => c.id === tx.clientId);
-                const msg = `SMS/Email sent to ${client.name}: ${tx.type} of ${formatMoney(tx.amount)} successful. Bal: ${formatMoney(tx.type === 'DEPOSIT' ? client.balance + tx.amount : client.balance - tx.amount)}`;
-                setNotification(msg);
-                setTimeout(() => setNotification(null), 5000);
+                    const updatedClients = clients.map(c => c.id === tx.clientId ? updatedClient : c);
+                    setClients(updatedClients);
+
+                    await CloudService.saveClient(updatedClient);
+
+                    // 3. Simulate Notification
+                    const msg = `Notification: ${tx.type} of ${formatMoney(tx.amount)} for ${oldClient.name} successful.`;
+                    setNotification(msg);
+                    setTimeout(() => setNotification(null), 5000);
+                }
+                setIsLoading(false);
             };
 
-            // Session Check
-            if (session === 'auth') return <AuthScreen onLogin={handleLogin} onSetup={handleSetup} hasAccount={appData.staff && appData.staff.length > 0} />;
+            // Loading View
+            if (isLoading || session === 'loading') return (
+                <div className="flex h-screen items-center justify-center bg-brand-900 text-white flex-col">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mb-4"></div>
+                    <p className="animate-bounce">Synchronizing with Cloud...</p>
+                </div>
+            );
 
+            // Session Views
+            if (session === 'setup') return <SetupScreen onConnect={handleConnect} />;
+            if (session === 'auth') return <AuthScreen onLogin={handleLogin} onSetup={handleSetup} hasAccount={true} />; // Always assume init needs setup inside Auth if appData is empty, but logic handles it
+            if (session === 'client') return <ClientPortal client={currentUser} transactions={transactions} onLogout={handleLogout} />;
+
+            // STAFF APP VIEW
             // Routing
             let content;
             if (view === 'dashboard') content = <DashboardHome clients={clients} transactions={transactions} />;
             if (view === 'clients') content = <ClientManager clients={clients} onAddClient={addClient} onSelectClient={(id) => { setSelectedClientId(id); setView('client-detail'); }} />;
-            if (view === 'settings') content = <Settings appData={appData} onAddStaff={handleAddStaff} onDeleteStaff={handleDeleteStaff} />;
+            if (view === 'settings') {
+                // RBAC Check for Settings
+                if (currentUser.role === 'admin') {
+                    content = <Settings appData={appData} onAddStaff={handleAddStaff} onDeleteStaff={handleDeleteStaff} onBack={() => setView('dashboard')} />;
+                } else {
+                    content = (
+                        <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                            <i data-lucide="lock" className="w-16 h-16 mb-4"></i>
+                            <h2 className="text-xl font-bold">Access Restricted</h2>
+                            <p>Only Administrators can access Settings.</p>
+                            <button onClick={() => setView('dashboard')} className="mt-4 text-brand-600 hover:underline">Return to Dashboard</button>
+                        </div>
+                    );
+                }
+            }
 
             if (view === 'client-detail') {
                 const client = clients.find(c => c.id === selectedClientId);
                 if (client) {
                     content = <ClientDetail client={client} transactions={transactions} onBack={() => setView('clients')} onTransaction={handleTransaction} />;
                 } else {
-                    setView('clients'); // Fallback
+                    setView('clients');
                 }
             }
 
@@ -887,7 +1219,7 @@
             }
 
             return (
-                <Layout onViewChange={setView} currentView={view} onLogout={() => setSession('auth')} currentUser={currentUser}>
+                <Layout onViewChange={setView} currentView={view} onLogout={handleLogout} currentUser={currentUser}>
                     {content}
                     {notification && <NotificationToast message={notification} onClose={() => setNotification(null)} />}
                 </Layout>

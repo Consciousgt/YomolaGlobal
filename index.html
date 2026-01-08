@@ -92,23 +92,38 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // --- CLOUD SERVICE (Firebase Adapter) ---
-        // This replaces the synchronous DataService with an async one.
+        // --- CLOUD SERVICE (Firebase Adapter + Offline Demo Mode) ---
 
         const DB_CONFIG_KEY = 'yomola_firebase_config';
+        const DEMO_KEYS = {
+            APP: 'yomola_demo_app',
+            CLIENTS: 'yomola_demo_clients',
+            TXS: 'yomola_demo_txs'
+        };
 
         const CloudService = {
             db: null,
             isConnected: false,
+            isDemo: false,
 
-            // Initialize Firebase with provided config
+            // Initialize 
             init: (config) => {
+                // Mode 1: Demo
+                if (config === 'demo') {
+                    CloudService.isDemo = true;
+                    CloudService.isConnected = true;
+                    localStorage.setItem(DB_CONFIG_KEY, 'demo');
+                    return true;
+                }
+
+                // Mode 2: Firebase
                 try {
                     if (firebase.apps.length === 0) {
                         firebase.initializeApp(config);
                     }
                     CloudService.db = firebase.firestore();
                     CloudService.isConnected = true;
+                    CloudService.isDemo = false;
                     localStorage.setItem(DB_CONFIG_KEY, JSON.stringify(config));
                     return true;
                 } catch (e) {
@@ -119,43 +134,71 @@
 
             loadConfig: () => {
                 const conf = localStorage.getItem(DB_CONFIG_KEY);
+                if (conf === 'demo') return 'demo';
                 return conf ? JSON.parse(conf) : null;
             },
 
             clearConfig: () => localStorage.removeItem(DB_CONFIG_KEY),
 
-            // Async Data Methods
+            // Async Data Methods (Handles both Cloud and Demo)
             loadApp: async () => {
+                if (CloudService.isDemo) {
+                    const local = localStorage.getItem(DEMO_KEYS.APP);
+                    return local ? JSON.parse(local) : { staff: [], businessName: 'Yomola Global (Demo)' };
+                }
                 if (!CloudService.db) throw new Error("Database not connected");
                 const snap = await CloudService.db.collection('settings').doc('app_global').get();
-                if (!snap.exists) return { staff: [], businessName: 'Yomola Global' }; // Default
+                if (!snap.exists) return { staff: [], businessName: 'Yomola Global' };
                 return snap.data();
             },
 
             saveApp: async (data) => {
+                if (CloudService.isDemo) {
+                    localStorage.setItem(DEMO_KEYS.APP, JSON.stringify(data));
+                    return;
+                }
                 if (!CloudService.db) return;
                 await CloudService.db.collection('settings').doc('app_global').set(data);
             },
 
             loadClients: async () => {
+                if (CloudService.isDemo) {
+                    return JSON.parse(localStorage.getItem(DEMO_KEYS.CLIENTS)) || [];
+                }
                 if (!CloudService.db) return [];
                 const snap = await CloudService.db.collection('clients').get();
                 return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             },
 
             saveClient: async (client) => {
+                if (CloudService.isDemo) {
+                    const clients = JSON.parse(localStorage.getItem(DEMO_KEYS.CLIENTS)) || [];
+                    const idx = clients.findIndex(c => c.id === client.id);
+                    if (idx >= 0) clients[idx] = client;
+                    else clients.push(client);
+                    localStorage.setItem(DEMO_KEYS.CLIENTS, JSON.stringify(clients));
+                    return;
+                }
                 if (!CloudService.db) return;
-                // Use string ID for doc to prevent duplicates easily if needed, but random ID is fine
                 await CloudService.db.collection('clients').doc(String(client.id)).set(client);
             },
 
             loadTransactions: async () => {
+                if (CloudService.isDemo) {
+                    return JSON.parse(localStorage.getItem(DEMO_KEYS.TXS)) || [];
+                }
                 if (!CloudService.db) return [];
-                const snap = await CloudService.db.collection('transactions').orderBy('date', 'desc').limit(2000).get(); // Limit for performance
+                const snap = await CloudService.db.collection('transactions').orderBy('date', 'desc').limit(2000).get();
                 return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             },
 
             saveTransaction: async (tx) => {
+                if (CloudService.isDemo) {
+                    const txs = JSON.parse(localStorage.getItem(DEMO_KEYS.TXS)) || [];
+                    txs.unshift(tx); // Add to top
+                    localStorage.setItem(DEMO_KEYS.TXS, JSON.stringify(txs));
+                    return;
+                }
                 if (!CloudService.db) return;
                 await CloudService.db.collection('transactions').doc(String(tx.id)).set(tx);
             },
@@ -176,7 +219,7 @@
 
         // --- COMPONENTS ---
 
-        // 1. SETUP SCREEN (Cloud Config)
+        // 1. SETUP SCREEN (Cloud Config or Demo)
         const SetupScreen = ({ onConnect }) => {
             const [config, setConfig] = useState({ apiKey: '', authDomain: '', projectId: '' });
             const [error, setError] = useState('');
@@ -199,13 +242,27 @@
                 setLoading(false);
             };
 
+            const handleDemo = () => {
+                const success = CloudService.init('demo');
+                if (success) onConnect();
+            };
+
             return (
                 <div className="flex items-center justify-center h-full bg-slate-900 text-white">
                     <div className="bg-white text-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md m-4">
                         <div className="text-center mb-6">
                             <h1 className="text-2xl font-bold mb-2">Cloud Setup</h1>
-                            <p className="text-slate-500 text-sm">Connect to your Firebase Project to enable synchronization.</p>
+                            <p className="text-slate-500 text-sm">Connect to Firebase to enable sync, or use Offline Demo Mode.</p>
                         </div>
+
+                        {/* Demo Mode Button */}
+                        <div className="mb-6 pb-6 border-b border-slate-100">
+                            <button onClick={handleDemo} className="w-full py-3 bg-slate-100 text-slate-700 rounded-lg font-bold hover:bg-slate-200 transition flex items-center justify-center gap-2">
+                                <i data-lucide="wifi-off" className="w-4 h-4"></i> Use Offline Demo Mode
+                            </button>
+                            <p className="text-xs text-center text-slate-400 mt-2">Data stays on this device only. Use for features testing.</p>
+                        </div>
+
                         <form onSubmit={handleSubmit} className="space-y-4">
                             <div>
                                 <label className="block text-xs font-bold uppercase text-slate-500 mb-1">API Key</label>
@@ -221,7 +278,7 @@
                             </div>
                             {error && <p className="text-red-500 text-sm font-bold">{error}</p>}
                             <button disabled={loading} className="w-full py-3 bg-brand-600 text-white rounded-lg font-bold hover:bg-brand-700 transition disabled:opacity-50">
-                                {loading ? 'Connecting...' : 'Connect Database'}
+                                {loading ? 'Connecting...' : 'Connect to Firebase'}
                             </button>
                         </form>
                     </div>
@@ -879,349 +936,185 @@
             );
         };
 
-        // 5. MAIN APP LOGIC & STATE (Async & Cloud)
+        // 5. MAIN APP LOGIC & STATE
         const App = () => {
-            const [session, setSession] = useState('loading'); // loading | setup | auth | app | client
-            const [isLoading, setIsLoading] = useState(true);
-
-            // Data State
-            const [appData, setAppData] = useState({ staff: [] });
+            const [session, setSession] = useState('loading'); // loading | auth | app | client
+            const [currentUser, setCurrentUser] = useState(null);
+            const [appData, setAppData] = useState(null);
             const [clients, setClients] = useState([]);
             const [transactions, setTransactions] = useState([]);
+            const [isLoading, setIsLoading] = useState(false);
 
-            const [currentUser, setCurrentUser] = useState(null);
-            const [view, setView] = useState('dashboard');
-            const [selectedClientId, setSelectedClientId] = useState(null);
-            const [notification, setNotification] = useState(null);
-
-            // Initial Cloud Check
+            // Initialize Local Backend
             useEffect(() => {
-                const checkCloud = async () => {
-                    setIsLoading(true);
-                    const config = CloudService.loadConfig();
-                    if (config) {
-                        const success = CloudService.init(config);
-                        if (success) {
-                            setSession('auth');
-                        } else {
-                            CloudService.clearConfig();
-                            setSession('setup');
-                        }
-                    } else {
-                        setSession('setup');
+                const initApp = async () => {
+                    CloudService.init('demo');
+                    try {
+                        const data = await CloudService.loadApp();
+                        setAppData(data);
+                        setSession('auth');
+                    } catch (e) {
+                        setAppData({ staff: [], businessName: 'Yomola Global' });
+                        setSession('auth');
                     }
-                    setIsLoading(false);
                 };
-                checkCloud();
+                initApp();
             }, []);
 
             useEffect(() => {
                 if (window.lucide) window.lucide.createIcons();
-            }, [session, view, clients, selectedClientId]);
+            }, [session, currentUser, clients]);
 
-            // Data Loader (Called on Login)
             const loadData = async () => {
-                const [app, cls, txs] = await Promise.all([
-                    CloudService.loadApp(),
-                    CloudService.loadClients(),
-                    CloudService.loadTransactions()
-                ]);
-                setAppData(app);
-                setClients(cls);
-                setTransactions(txs);
-                return { app, cls };
-            };
-
-            // Handlers
-            const handleConnect = () => {
-                setSession('auth');
-            };
-
-            const handleLogin = async ({ type, pin, phone }) => {
                 setIsLoading(true);
                 try {
-                    const { app, cls } = await loadData();
+                    const [settings, cls, txs] = await Promise.all([
+                        CloudService.loadApp(),
+                        CloudService.loadClients(),
+                        CloudService.loadTransactions()
+                    ]);
+                    setAppData(settings);
+                    setClients(cls);
+                    setTransactions(txs);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
 
-                    if (type === 'staff') {
-                        // Staff Logic
-                        const user = app.staff ? app.staff.find(u => u.pin === pin) : null;
-                        if (user) {
-                            setCurrentUser(user);
+            const handleLogin = async (creds) => {
+                setIsLoading(true);
+                const latestApp = await CloudService.loadApp();
+                const latestClients = await CloudService.loadClients();
+
+                if (creds.type === 'staff') {
+                    // Clean admin check
+                    const adminPin = latestApp.adminPin;
+                    if (!adminPin || creds.pin === adminPin) {
+                        if (!adminPin) await CloudService.saveApp({ ...latestApp, adminPin: creds.pin });
+                        setCurrentUser({ name: 'Admin', role: 'admin' });
+                        await loadData();
+                        setSession('app');
+                    } else {
+                        const staff = latestApp.staff?.find(s => s.pin === creds.pin);
+                        if (staff) {
+                            setCurrentUser(staff);
+                            await loadData();
                             setSession('app');
                         } else {
                             alert("Invalid PIN");
                         }
-                    } else {
-                        // Client Logic
-                        const client = cls.find(c => c.phone === phone);
-                        if (client) {
-                            setCurrentUser(client);
-                            setSession('client');
-                        } else {
-                            alert("Phone number not found. Contact staff.");
-                        }
                     }
-                } catch (e) {
-                    console.error("Login Error", e);
-                    alert("Connection Error: " + e.message);
+                } else {
+                    const client = latestClients.find(c => c.phone === creds.phone);
+                    if (client) {
+                        setCurrentUser(client);
+                        await loadData();
+                        setSession('client');
+                    } else {
+                        alert("Phone not found.");
+                    }
                 }
-                setIsLoading(false);
-            };
-
-            const handleSetup = async (pin) => {
-                setIsLoading(true);
-                // Create Admin on Cloud
-                const newAdmin = { id: 1, name: 'Admin', pin, role: 'admin' };
-                const newData = { businessName: 'Yomola Global', staff: [newAdmin] };
-
-                await CloudService.saveApp(newData);
-                setAppData(newData);
-                setCurrentUser(newAdmin);
-                setSession('app');
                 setIsLoading(false);
             };
 
             const handleLogout = () => {
+                setSession('auth');
                 setCurrentUser(null);
                 setClients([]);
                 setTransactions([]);
-                setSession('auth');
-                setView('dashboard');
             };
 
-            // CRUD Handlers (Updated for Cloud)
-            const handleAddStaff = async (staff) => {
-                const newData = { ...appData, staff: [...(appData.staff || []), { ...staff, id: Date.now() }] };
-                setAppData(newData);
-                await CloudService.saveApp(newData);
-                alert("Staff member created!");
-            };
+            // Shim for CRUD operations passed to Router
+            const crud = {
+                addStaff: async (staff) => {
+                    const updated = { ...appData, staff: [...(appData.staff || []), { ...staff, id: Date.now() }] };
+                    await CloudService.saveApp(updated);
+                    setAppData(updated);
+                },
+                deleteStaff: async (id) => {
+                    const updated = { ...appData, staff: appData.staff.filter(s => s.id !== id) };
+                    await CloudService.saveApp(updated);
+                    setAppData(updated);
+                },
+                addClient: async (c) => {
+                    const newClient = { ...c, id: Date.now(), balance: 0 };
+                    await CloudService.saveClient(newClient);
+                    setClients(prev => [...prev, newClient]);
+                    return newClient;
+                },
+                addTransaction: async (tx) => {
+                    setIsLoading(true);
+                    const newTx = { ...tx, id: Date.now(), processedBy: currentUser.name };
+                    const client = clients.find(c => c.id === tx.clientId);
+                    const newBal = tx.type === 'DEPOSIT' ? client.balance + parseFloat(tx.amount) : client.balance - parseFloat(tx.amount);
+                    const updatedClient = { ...client, balance: newBal };
 
-            const handleDeleteStaff = async (id) => {
-                if (!confirm("Are you sure?")) return;
-                const newData = { ...appData, staff: appData.staff.filter(s => s.id !== id) };
-                setAppData(newData);
-                await CloudService.saveApp(newData);
-            };
+                    await Promise.all([CloudService.saveTransaction(newTx), CloudService.saveClient(updatedClient)]);
 
-            const addClient = async (client) => {
-                setIsLoading(true);
-                const updated = [client, ...clients];
-                setClients(updated);
-                await CloudService.saveClient(client);
-                setIsLoading(false);
-            };
-
-            const handleTransaction = async (tx) => {
-                setIsLoading(true);
-                // Enterprise: Audit Trail
-                const stampedTx = { ...tx, processedBy: currentUser?.name || 'Unknown' };
-
-                // 1. Save Transaction locally & cloud
-                const newTxs = [stampedTx, ...transactions];
-                setTransactions(newTxs);
-                await CloudService.saveTransaction(stampedTx);
-
-                // 2. Update Balance locally & cloud
-                // Find old client object
-                const oldClient = clients.find(c => c.id === tx.clientId);
-                if (oldClient) {
-                    const newBal = tx.type === 'DEPOSIT' ? (oldClient.balance + tx.amount) : (oldClient.balance - tx.amount);
-                    const updatedClient = { ...oldClient, balance: newBal };
-
-                    const updatedClients = clients.map(c => c.id === tx.clientId ? updatedClient : c);
-                    setClients(updatedClients);
-
-                    await CloudService.saveClient(updatedClient);
-
-                    // 3. Simulate Notification
-                    const msg = `Notification: ${tx.type} of ${formatMoney(tx.amount)} for ${oldClient.name} successful.`;
-                    setNotification(msg);
-                    setTimeout(() => setNotification(null), 5000);
+                    setTransactions(prev => [newTx, ...prev]);
+                    setClients(prev => prev.map(c => c.id === client.id ? updatedClient : c));
+                    setIsLoading(false);
                 }
-                setIsLoading(false);
             };
 
-            // Loading View
-            if (isLoading || session === 'loading') return (
-                <div className="flex h-screen items-center justify-center bg-brand-900 text-white flex-col">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mb-4"></div>
-                    <p className="animate-bounce">Synchronizing with Cloud...</p>
-                </div>
-            );
-
-            // Session Views
-            if (session === 'setup') return <SetupScreen onConnect={handleConnect} />;
-            if (session === 'auth') return <AuthScreen onLogin={handleLogin} onSetup={handleSetup} hasAccount={true} />; // Always assume init needs setup inside Auth if appData is empty, but logic handles it
+            if (isLoading && session !== 'app') return <div className="flex h-screen items-center justify-center text-slate-400">Loading...</div>;
+            if (session === 'auth') return <AuthScreen onLogin={handleLogin} onSetup={(pin) => handleLogin({ type: 'staff', pin })} hasAccount={!!appData?.adminPin} />;
             if (session === 'client') return <ClientPortal client={currentUser} transactions={transactions} onLogout={handleLogout} />;
 
-            // STAFF APP VIEW
-            // Routing
-            let content;
-            if (view === 'dashboard') content = <DashboardHome clients={clients} transactions={transactions} />;
-            if (view === 'clients') content = <ClientManager clients={clients} onAddClient={addClient} onSelectClient={(id) => { setSelectedClientId(id); setView('client-detail'); }} />;
-            if (view === 'settings') {
-                // RBAC Check for Settings
-                if (currentUser.role === 'admin') {
-                    content = <Settings appData={appData} onAddStaff={handleAddStaff} onDeleteStaff={handleDeleteStaff} onBack={() => setView('dashboard')} />;
-                } else {
-                    content = (
-                        <div className="flex flex-col items-center justify-center h-full text-slate-400">
-                            <i data-lucide="lock" className="w-16 h-16 mb-4"></i>
-                            <h2 className="text-xl font-bold">Access Restricted</h2>
-                            <p>Only Administrators can access Settings.</p>
-                            <button onClick={() => setView('dashboard')} className="mt-4 text-brand-600 hover:underline">Return to Dashboard</button>
-                        </div>
-                    );
+            return <DashboardRouter currentUser={currentUser} appData={appData} clients={clients} transactions={transactions} crud={crud} onLogout={handleLogout} />;
+        };
+
+        const DashboardRouter = ({ currentUser, appData, clients, transactions, crud, onLogout }) => {
+            const [view, setView] = useState('dashboard');
+            const [selectedClientId, setSelectedClientId] = useState(null);
+
+            useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            }, [view]);
+
+            const renderContent = () => {
+                if (selectedClientId) {
+                    const c = clients.find(cl => cl.id === selectedClientId);
+                    return <ClientDetail client={c} transactions={transactions} onBack={() => setSelectedClientId(null)} onTransaction={crud.addTransaction} />;
                 }
-            }
 
-            if (view === 'client-detail') {
-                const client = clients.find(c => c.id === selectedClientId);
-                if (client) {
-                    content = <ClientDetail client={client} transactions={transactions} onBack={() => setView('clients')} onTransaction={handleTransaction} />;
-                } else {
-                    setView('clients');
-                }
-            }
-
-            if (view === 'transactions') {
-                const sortedTx = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
-                content = (
-                    <div className="space-y-6">
-                        <div className="flex justify-between items-center">
-                            <h2 className="text-2xl font-bold text-slate-800">All Transactions</h2>
-                            <div className="bg-white px-4 py-2 rounded-lg border text-sm font-medium text-slate-500">
-                                Total Volume: {formatMoney(sortedTx.reduce((sum, t) => sum + t.amount, 0))}
-                            </div>
-                        </div>
-                        <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-100">
-                            <table className="w-full text-left text-sm">
-                                <thead className="bg-slate-50 text-slate-500 font-medium border-b">
-                                    <tr>
-                                        <th className="p-4">Date</th>
-                                        <th className="p-4">Client</th>
-                                        <th className="p-4">Type</th>
-                                        <th className="p-4">Method</th>
-                                        <th className="p-4">Processor</th>
-                                        <th className="p-4 text-right">Amount</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    {sortedTx.map(t => {
-                                        const client = clients.find(c => c.id === t.clientId);
-                                        return (
-                                            <tr key={t.id} className="hover:bg-slate-50 transition">
-                                                <td className="p-4 text-slate-500">{t.date}</td>
-                                                <td className="p-4 font-medium text-slate-900">{client ? client.name : 'Unknown Client'}</td>
-                                                <td className="p-4">
-                                                    <span className={`px-2 py-1 rounded text-xs font-bold ${t.type === 'DEPOSIT' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-                                                        {t.type}
-                                                    </span>
-                                                </td>
-                                                <td className="p-4 text-slate-600">{t.method}</td>
-                                                <td className="p-4 text-xs font-mono text-slate-500 uppercase">{t.processedBy || 'Admin'}</td>
-                                                <td className={`p-4 text-right font-bold ${t.type === 'DEPOSIT' ? 'text-emerald-600' : 'text-red-600'}`}>
-                                                    {t.type === 'DEPOSIT' ? '+' : '-'}{formatMoney(t.amount)}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                    {sortedTx.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-slate-400">No transactions found.</td></tr>}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                );
-            }
-            if (view === 'reports') {
-                const totalDeps = transactions.filter(t => t.type === 'DEPOSIT').reduce((s, t) => s + t.amount, 0);
-                const totalWith = transactions.filter(t => t.type === 'WITHDRAWAL').reduce((s, t) => s + t.amount, 0);
-                const netGrowth = totalDeps - totalWith;
-
-                // 7-Day Chart Data
-                const today = new Date();
-                const chartData = Array.from({ length: 7 }, (_, i) => {
-                    const d = new Date(today);
-                    d.setDate(today.getDate() - (6 - i));
-                    const dateStr = d.toISOString().slice(0, 10);
-                    const vol = transactions.filter(t => t.date === dateStr && t.type === 'DEPOSIT').reduce((s, t) => s + t.amount, 0);
-                    return { date: dateStr.slice(5), volume: vol };
-                });
-                const maxVol = Math.max(...chartData.map(d => d.volume), 1); // Avoid div by 0
-
-                // Top Clients
-                const topClients = [...clients].sort((a, b) => b.balance - a.balance).slice(0, 5);
-
-                content = (
-                    <div className="space-y-6">
-                        <h2 className="text-2xl font-bold text-slate-800">Agency Reports</h2>
-
-                        {/* Summary Cards */}
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-                                <p className="text-xs font-bold text-slate-500 uppercase">Net Growth</p>
-                                <p className={`text-3xl font-bold mt-2 ${netGrowth >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                    {netGrowth >= 0 ? '+' : ''}{formatMoney(netGrowth)}
-                                </p>
-                            </div>
-                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-                                <p className="text-xs font-bold text-slate-500 uppercase">Total Deposits</p>
-                                <p className="text-3xl font-bold text-slate-800 mt-2">{formatMoney(totalDeps)}</p>
-                            </div>
-                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-                                <p className="text-xs font-bold text-slate-500 uppercase">Total Withdrawals</p>
-                                <p className="text-3xl font-bold text-red-600 mt-2">-{formatMoney(totalWith)}</p>
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            {/* Chart */}
-                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-                                <h3 className="font-bold text-lg mb-6">Deposits (Last 7 Days)</h3>
-                                <div className="flex items-end justify-between h-48 gap-2">
-                                    {chartData.map((d, i) => (
-                                        <div key={i} className="flex-1 flex flex-col justify-end items-center group">
-                                            <div
-                                                className="w-full bg-brand-500 rounded-t-lg transition-all duration-500 group-hover:bg-brand-600 relative"
-                                                style={{ height: `${(d.volume / maxVol) * 100}%` }}
-                                            >
-                                                <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition whitespace-nowrap">
-                                                    {formatMoney(d.volume)}
-                                                </div>
-                                            </div>
-                                            <p className="text-xs text-slate-400 mt-2 font-medium">{d.date}</p>
-                                        </div>
-                                    ))}
+                switch (view) {
+                    case 'clients': return <ClientManager clients={clients} onAddClient={crud.addClient} onSelectClient={setSelectedClientId} />;
+                    case 'transactions':
+                        return <div className="bg-white rounded-xl shadow p-4"><h2 className="font-bold mb-4">All Transactions</h2><p className="text-slate-500">View all transactions in client profiles.</p></div>;
+                    case 'settings':
+                        if (currentUser.role !== 'admin') return <div className="p-8 text-center text-red-500 font-bold">Access Denied - Admins Only</div>;
+                        return <Settings appData={appData} onAddStaff={crud.addStaff} onDeleteStaff={crud.deleteStaff} onBack={() => setView('dashboard')} />;
+                    case 'reports':
+                        const totalDeps = transactions.filter(t => t.type === 'DEPOSIT').reduce((s, t) => s + t.amount, 0);
+                        const totalWith = transactions.filter(t => t.type === 'WITHDRAWAL').reduce((s, t) => s + t.amount, 0);
+                        const netGrowth = totalDeps - totalWith;
+                        return (
+                            <div className="space-y-6">
+                                <h2 className="text-2xl font-bold text-slate-800">Reports</h2>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-emerald-500">
+                                        <p className="text-xs font-bold text-slate-500 uppercase">Net Growth</p>
+                                        <p className={`text-3xl font-bold mt-2 ${netGrowth >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(netGrowth)}</p>
+                                    </div>
+                                    <div className="bg-white p-6 rounded-2xl shadow-sm">
+                                        <p className="text-xs font-bold text-slate-500 uppercase">Deposits</p>
+                                        <p className="text-3xl font-bold mt-2 text-slate-800">{formatMoney(totalDeps)}</p>
+                                    </div>
+                                    <div className="bg-white p-6 rounded-2xl shadow-sm">
+                                        <p className="text-xs font-bold text-slate-500 uppercase">Withdrawals</p>
+                                        <p className="text-3xl font-bold mt-2 text-red-600">-{formatMoney(totalWith)}</p>
+                                    </div>
                                 </div>
                             </div>
-
-                            {/* Top Clients */}
-                            <div className="bg-white p-0 rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                                <div className="p-6 border-b border-slate-100">
-                                    <h3 className="font-bold text-lg">Top 5 Savers</h3>
-                                </div>
-                                <table className="w-full text-left text-sm">
-                                    <tbody className="divide-y divide-slate-100">
-                                        {topClients.map((client, i) => (
-                                            <tr key={client.id} className="hover:bg-slate-50">
-                                                <td className="p-4 pl-6 text-slate-400 font-bold w-12 text-center">{i + 1}</td>
-                                                <td className="p-4 font-medium text-slate-900">{client.name}</td>
-                                                <td className="p-4 text-right font-bold text-brand-600">{formatMoney(client.balance)}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                );
-            }
+                        );
+                    default: return <DashboardHome clients={clients} transactions={transactions} />;
+                }
+            };
 
             return (
-                <Layout onViewChange={setView} currentView={view} onLogout={handleLogout} currentUser={currentUser}>
-                    {content}
-                    {notification && <NotificationToast message={notification} onClose={() => setNotification(null)} />}
+                <Layout currentUser={currentUser} currentView={view} onViewChange={setView} onLogout={onLogout}>
+                    {renderContent()}
                 </Layout>
             );
         };

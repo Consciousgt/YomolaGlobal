@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yomola Global - Contribution Agency</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0ea5e9', // Sky Blue
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+
+        .animate-bounce-in {
+            animation: bounceIn 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        }
+
+        @keyframes bounceIn {
+            0% {
+                transform: scale(0.3);
+                opacity: 0;
+            }
+
+            50% {
+                transform: scale(1.05);
+                opacity: 1;
+            }
+
+            70% {
+                transform: scale(0.9);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 h-screen overflow-hidden">
+    <div id="root" class="h-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- DATA SERVICE ---
+        const CLIENTS_KEY = 'yomola_clients_v1';
+        const TRANSACTIONS_KEY = 'yomola_transactions_v1';
+        const APP_KEY = 'yomola_app_v1';
+
+        const DataService = {
+            loadClients: () => JSON.parse(localStorage.getItem(CLIENTS_KEY)) || [],
+            saveClients: (data) => localStorage.setItem(CLIENTS_KEY, JSON.stringify(data)),
+
+            loadTransactions: () => JSON.parse(localStorage.getItem(TRANSACTIONS_KEY)) || [],
+            saveTransactions: (data) => localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(data)),
+
+            loadApp: () => JSON.parse(localStorage.getItem(APP_KEY)) || { adminPin: null, businessName: 'Yomola Global' },
+            saveApp: (data) => localStorage.setItem(APP_KEY, JSON.stringify(data)),
+        };
+
+        // --- UTILS ---
+        const formatMoney = (amount) => '₦' + (amount || 0).toLocaleString();
+        const formatDate = (dateStr) => new Date(dateStr).toLocaleDateString();
+
+        // --- COMPONENTS ---
+
+        // 1. AUTH SCREEN
+        const AuthScreen = ({ onLogin, onSetup, hasAccount }) => {
+            const [pin, setPin] = useState('');
+            const [error, setError] = useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (pin.length < 4) return setError("PIN must be at least 4 digits");
+                hasAccount ? onLogin(pin) : onSetup(pin);
+            };
+
+            return (
+                <div className="flex items-center justify-center h-full bg-brand-900 text-white">
+                    <div className="bg-white text-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md m-4">
+                        <div className="text-center mb-8">
+                            <div className="inline-flex items-center justify-center p-3 bg-brand-50 rounded-full text-brand-600 mb-4">
+                                <i data-lucide="shield-check" className="w-8 h-8"></i>
+                            </div>
+                            <h1 className="text-3xl font-bold text-brand-900">Yomola Global</h1>
+                            <p className="text-slate-500 mt-2">{hasAccount ? 'Staff Login Portal' : 'Initial System Setup'}</p>
+                        </div>
+                        <form onSubmit={handleSubmit} className="space-y-6">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">{hasAccount ? 'Enter Access PIN' : 'Create Admin PIN'}</label>
+                                <input type="password" value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g, '')); setError(''); }} className="w-full text-center text-3xl p-4 border rounded-xl focus:ring-2 focus:ring-brand-500 outline-none tracking-[1em] font-mono" placeholder="••••" autoFocus />
+                                {error && <p className="text-red-500 text-sm text-center mt-2">{error}</p>}
+                            </div>
+                            <button className="w-full py-4 bg-brand-600 text-white rounded-xl font-bold text-lg hover:bg-brand-700 transition shadow-lg shadow-brand-200">{hasAccount ? 'Access Dashboard' : 'Initialize System'}</button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        // 2. DASHBOARD LAYOUT
+        const Layout = ({ children, onViewChange, currentView, onLogout }) => {
+            return (
+                <div className="flex h-screen bg-slate-50 text-slate-800">
+                    {/* Sidebar */}
+                    <aside className="w-64 bg-brand-900 text-white flex flex-col hidden md:flex">
+                        <div className="p-6 border-b border-brand-800">
+                            <h2 className="text-xl font-bold tracking-wide">Yomola Global</h2>
+                            <p className="text-xs text-brand-400 mt-1">Contribution Agency</p>
+                        </div>
+                        <nav className="flex-1 p-4 space-y-2">
+                            {[
+                                { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
+                                { id: 'clients', label: 'Clients', icon: 'users' },
+                                { id: 'transactions', label: 'Transactions', icon: 'arrow-right-left' },
+                                { id: 'reports', label: 'Reports', icon: 'file-bar-chart' },
+                            ].map(item => (
+                                <button key={item.id} onClick={() => onViewChange(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition ${currentView === item.id ? 'bg-brand-700 text-white shadow-lg' : 'text-brand-100 hover:bg-brand-800'}`}>
+                                    <i data-lucide={item.icon} className="w-5 h-5"></i>
+                                    <span className="font-medium">{item.label}</span>
+                                </button>
+                            ))}
+                        </nav>
+                        <div className="p-4 border-t border-brand-800">
+                            <button onClick={onLogout} className="w-full flex items-center gap-2 px-4 py-2 text-brand-300 hover:text-white transition">
+                                <i data-lucide="log-out" className="w-5 h-5"></i> Logout
+                            </button>
+                        </div>
+                    </aside>
+
+                    {/* Main Content */}
+                    <main className="flex-1 flex flex-col h-full overflow-hidden">
+                        <header className="bg-white px-8 py-4 shadow-sm z-10 flex justify-between items-center">
+                            <div className="flex items-center gap-4">
+                                <button className="md:hidden p-2 text-slate-600"><i data-lucide="menu"></i></button>
+                                <h2 className="text-xl font-bold text-slate-800 capitalize">{currentView}</h2>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-brand-100 text-brand-600 flex items-center justify-center font-bold">A</div>
+                                <span className="text-sm font-medium">Admin</span>
+                            </div>
+                        </header>
+                        <div className="flex-1 overflow-auto p-8">
+                            {children}
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        // 3. FEATURE VIEWS
+
+        const ClientManager = ({ clients, onAddClient, onSelectClient }) => {
+            const [showForm, setShowForm] = useState(false);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [newClient, setNewClient] = useState({ name: '', phone: '', email: '', plan: 'Daily', address: '' });
+
+            const filteredClients = clients.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.phone.includes(searchTerm));
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onAddClient({ ...newClient, id: Date.now(), balance: 0, createdAt: new Date().toISOString() });
+                setNewClient({ name: '', phone: '', email: '', plan: 'Daily', address: '' });
+                setShowForm(false);
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="flex justify-between items-center">
+                        <div className="relative w-96">
+                            <input
+                                type="text"
+                                placeholder="Search clients..."
+                                value={searchTerm}
+                                onChange={e => setSearchTerm(e.target.value)}
+                                className="w-full pl-10 pr-4 py-2 border rounded-xl focus:ring-2 focus:ring-brand-500 outline-none"
+                            />
+                            <i data-lucide="search" className="absolute left-3 top-2.5 w-4 h-4 text-slate-400"></i>
+                        </div>
+                        <button onClick={() => setShowForm(true)} className="bg-brand-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-brand-700 flex items-center gap-2">
+                            <i data-lucide="user-plus" className="w-4 h-4"></i> Add Client
+                        </button>
+                    </div>
+
+                    {/* Add Client Modal */}
+                    {showForm && (
+                        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h3 className="text-xl font-bold">Add New Client</h3>
+                                    <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600"><i data-lucide="x"></i></button>
+                                </div>
+                                <form onSubmit={handleSubmit} className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div><label className="text-sm font-medium block mb-1">Full Name</label><input required value={newClient.name} onChange={e => setNewClient({ ...newClient, name: e.target.value })} className="w-full border p-2 rounded-lg" /></div>
+                                        <div><label className="text-sm font-medium block mb-1">Phone</label><input required type="tel" value={newClient.phone} onChange={e => setNewClient({ ...newClient, phone: e.target.value })} className="w-full border p-2 rounded-lg" /></div>
+                                    </div>
+                                    <div><label className="text-sm font-medium block mb-1">Email (Optional)</label><input type="email" value={newClient.email} onChange={e => setNewClient({ ...newClient, email: e.target.value })} className="w-full border p-2 rounded-lg" /></div>
+                                    <div><label className="text-sm font-medium block mb-1">Address</label><input value={newClient.address} onChange={e => setNewClient({ ...newClient, address: e.target.value })} className="w-full border p-2 rounded-lg" /></div>
+                                    <div>
+                                        <label className="text-sm font-medium block mb-1">Savings Plan</label>
+                                        <select value={newClient.plan} onChange={e => setNewClient({ ...newClient, plan: e.target.value })} className="w-full border p-2 rounded-lg">
+                                            <option>Daily</option><option>Weekly</option><option>Monthly</option><option>Irregular</option>
+                                        </select>
+                                    </div>
+                                    <button className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold hover:bg-brand-700 mt-4">Register Client</button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Clients Table */}
+                    <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-100">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-50 text-slate-500 font-medium">
+                                <tr>
+                                    <th className="p-4">Name</th>
+                                    <th className="p-4">Plan</th>
+                                    <th className="p-4">Phone</th>
+                                    <th className="p-4 text-right">Balance</th>
+                                    <th className="p-4 text-center">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {filteredClients.map(client => (
+                                    <tr key={client.id} className="hover:bg-slate-50 transition">
+                                        <td className="p-4 font-medium text-slate-900">{client.name}</td>
+                                        <td className="p-4"><span className="px-2 py-1 bg-brand-50 text-brand-700 rounded text-xs font-bold">{client.plan}</span></td>
+                                        <td className="p-4 text-slate-500">{client.phone}</td>
+                                        <td className="p-4 text-right font-bold text-slate-900">{formatMoney(client.balance)}</td>
+                                        <td className="p-4 text-center">
+                                            <button onClick={() => onSelectClient(client.id)} className="text-brand-600 hover:text-brand-800 font-medium text-xs">View</button>
+                                        </td>
+                                    </tr>
+                                ))}
+                                {filteredClients.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">No clients found</td></tr>}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        const DashboardHome = ({ clients, transactions }) => {
+            const stats = useMemo(() => {
+                const totalClients = clients.length;
+                const totalHoldings = clients.reduce((sum, c) => sum + (c.balance || 0), 0);
+                const todaysTx = transactions.filter(t => new Date(t.date).toDateString() === new Date().toDateString());
+                const todaysVolume = todaysTx.reduce((sum, t) => sum + (t.type === 'DEPOSIT' ? t.amount : 0), 0);
+                return { totalClients, totalHoldings, todaysVolume };
+            }, [clients, transactions]);
+
+            return (
+                <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border-b-4 border-brand-500">
+                            <p className="text-slate-500 text-sm font-medium uppercase">Total Holdings</p>
+                            <p className="text-3xl font-bold text-slate-800 mt-2">{formatMoney(stats.totalHoldings)}</p>
+                        </div>
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border-b-4 border-emerald-500">
+                            <p className="text-slate-500 text-sm font-medium uppercase">Today's Deposits</p>
+                            <p className="text-3xl font-bold text-slate-800 mt-2">{formatMoney(stats.todaysVolume)}</p>
+                        </div>
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border-b-4 border-purple-500">
+                            <p className="text-slate-500 text-sm font-medium uppercase">Active Clients</p>
+                            <p className="text-3xl font-bold text-slate-800 mt-2">{stats.totalClients}</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 4. CLIENT DETAIL & TRANSACTIONS
+        const ClientDetail = ({ client, transactions, onBack, onTransaction }) => {
+            const [showTxForm, setShowTxForm] = useState(false);
+            const [txData, setTxData] = useState({ type: 'DEPOSIT', amount: 0, method: 'Cash', date: new Date().toISOString().slice(0, 10) });
+
+            // Statement Filters
+            const [dateRange, setDateRange] = useState({
+                start: new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10), // Jan 1st
+                end: new Date().toISOString().slice(0, 10)
+            });
+
+            const clientTx = transactions.filter(t => t.clientId === client.id).sort((a, b) => new Date(b.date) - new Date(a.date));
+            const filteredTx = clientTx.filter(t => t.date >= dateRange.start && t.date <= dateRange.end);
+
+            const handleTxSubmit = (e) => {
+                e.preventDefault();
+                onTransaction({
+                    id: Date.now(),
+                    clientId: client.id,
+                    ...txData,
+                    amount: parseFloat(txData.amount)
+                });
+                setShowTxForm(false);
+                setTxData({ type: 'DEPOSIT', amount: 0, method: 'Cash', date: new Date().toISOString().slice(0, 10) });
+            };
+
+            const downloadStatement = () => {
+                const doc = new window.jspdf.jsPDF();
+
+                // Header
+                doc.setFillColor(12, 74, 110); // Brand 900
+                doc.rect(0, 0, 210, 40, 'F');
+                doc.setTextColor(255, 255, 255);
+                doc.setFontSize(22);
+                doc.text("Yomola Global", 14, 20);
+                doc.setFontSize(12);
+                doc.text("Contribution Agency", 14, 28);
+
+                doc.setTextColor(0, 0, 0);
+                doc.setFontSize(16);
+                doc.text(`Statement of Account`, 14, 55);
+
+                doc.setFontSize(10);
+                doc.text(`Client: ${client.name}`, 14, 65);
+                doc.text(`Phone: ${client.phone}`, 14, 70);
+                doc.text(`Period: ${formatDate(dateRange.start)} - ${formatDate(dateRange.end)}`, 14, 75);
+                doc.text(`Generated: ${new Date().toLocaleDateString()}`, 150, 65);
+
+                // Summary Box
+                const totalDep = filteredTx.filter(t => t.type === 'DEPOSIT').reduce((a, b) => a + b.amount, 0);
+                const totalWith = filteredTx.filter(t => t.type === 'WITHDRAWAL').reduce((a, b) => a + b.amount, 0);
+
+                doc.setDrawColor(200);
+                doc.rect(130, 80, 70, 25);
+                doc.text(`Total Deposits: ${formatMoney(totalDep)}`, 135, 88);
+                doc.text(`Total Withdrawals: ${formatMoney(totalWith)}`, 135, 95);
+                doc.setFont(undefined, 'bold');
+                doc.text(`Net Change: ${formatMoney(totalDep - totalWith)}`, 135, 102);
+                doc.setFont(undefined, 'normal');
+
+                const tableData = filteredTx.map(t => [t.date, t.type, t.method, formatMoney(t.amount)]);
+                doc.autoTable({
+                    startY: 115,
+                    head: [['Date', 'Type', 'Method', 'Amount']],
+                    body: tableData,
+                    theme: 'striped',
+                    headStyles: { fillColor: [14, 165, 233] },
+                });
+
+                doc.save(`Statement_${client.name}_${dateRange.start}_to_${dateRange.end}.pdf`);
+            };
+
+            return (
+                <div className="space-y-6">
+                    <button onClick={onBack} className="text-slate-500 hover:text-slate-700 flex items-center gap-2 mb-4">
+                        <i data-lucide="arrow-left" className="w-4 h-4"></i> Back to Clients
+                    </button>
+
+                    {/* Header Card */}
+                    <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 flex flex-col md:flex-row justify-between items-center gap-6">
+                        <div>
+                            <h2 className="text-3xl font-bold text-slate-800">{client.name}</h2>
+                            <div className="flex gap-4 mt-2 text-slate-500 text-sm">
+                                <span className="flex items-center gap-1"><i data-lucide="phone" className="w-4 h-4"></i> {client.phone}</span>
+                                <span className="flex items-center gap-1"><i data-lucide="map-pin" className="w-4 h-4"></i> {client.address || 'No Address'}</span>
+                            </div>
+                            <div className="mt-4 inline-block bg-brand-50 text-brand-700 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide">
+                                {client.plan} Savings Plan
+                            </div>
+                        </div>
+                        <div className="text-right">
+                            <p className="text-sm text-slate-400 font-medium uppercase">Current Balance</p>
+                            <p className="text-5xl font-bold text-brand-600 tracking-tight">{formatMoney(client.balance)}</p>
+                            <div className="flex gap-2 mt-4 justify-end">
+                                <button onClick={() => { setTxData({ ...txData, type: 'DEPOSIT' }); setShowTxForm(true); }} className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg shadow-emerald-200 transition">+ Deposit</button>
+                                <button onClick={() => { setTxData({ ...txData, type: 'WITHDRAWAL' }); setShowTxForm(true); }} className="bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg shadow-red-200 transition">- Withdraw</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Transaction History & Filters */}
+                    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                        <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
+                            <h3 className="font-bold text-lg">Transaction History</h3>
+                            <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                                <span className="text-xs font-bold text-slate-500 uppercase px-2">Statement Range:</span>
+                                <input type="date" value={dateRange.start} onChange={e => setDateRange({ ...dateRange, start: e.target.value })} className="text-sm bg-transparent outline-none border-b border-slate-300 focus:border-brand-500" />
+                                <span className="text-slate-400">-</span>
+                                <input type="date" value={dateRange.end} onChange={e => setDateRange({ ...dateRange, end: e.target.value })} className="text-sm bg-transparent outline-none border-b border-slate-300 focus:border-brand-500" />
+                                <button onClick={downloadStatement} className="ml-2 bg-brand-600 hover:bg-brand-700 text-white p-2 rounded-lg" title="Download PDF">
+                                    <i data-lucide="download" className="w-4 h-4"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-50 text-slate-500 border-b">
+                                <tr><th className="p-4">Date</th><th className="p-4">Type</th><th className="p-4">Method</th><th className="p-4 text-right">Amount</th></tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                                {clientTx.map(t => (
+                                    <tr key={t.id} className="hover:bg-slate-50">
+                                        <td className="p-4 text-slate-500">{t.date}</td>
+                                        <td className="p-4">
+                                            <span className={`px-2 py-1 rounded text-xs font-bold ${t.type === 'DEPOSIT' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                                                {t.type}
+                                            </span>
+                                        </td>
+                                        <td className="p-4 text-slate-600">{t.method}</td>
+                                        <td className={`p-4 text-right font-bold ${t.type === 'DEPOSIT' ? 'text-emerald-600' : 'text-red-600'}`}>
+                                            {t.type === 'DEPOSIT' ? '+' : '-'}{formatMoney(t.amount)}
+                                        </td>
+                                    </tr>
+                                ))}
+                                {clientTx.length === 0 && <tr><td colSpan="4" className="p-8 text-center text-slate-300">No transactions recorded yet.</td></tr>}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {/* Transaction Modal */}
+                    {showTxForm && (
+                        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 transform transition-all scale-100">
+                                <h3 className="text-xl font-bold mb-4">{txData.type === 'DEPOSIT' ? 'Record Deposit' : 'Record Withdrawal'}</h3>
+                                <form onSubmit={handleTxSubmit} className="space-y-4">
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase">Amount</label>
+                                        <input type="number" required min="1" autoFocus value={txData.amount} onChange={e => setTxData({ ...txData, amount: e.target.value })} className="w-full text-3xl font-bold p-2 border-b-2 border-slate-200 focus:border-brand-500 outline-none" placeholder="0.00" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500 uppercase">Date</label>
+                                            <input type="date" required value={txData.date} onChange={e => setTxData({ ...txData, date: e.target.value })} className="w-full p-2 bg-slate-50 rounded" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500 uppercase">Method</label>
+                                            <select value={txData.method} onChange={e => setTxData({ ...txData, method: e.target.value })} className="w-full p-2 bg-slate-50 rounded">
+                                                <option>Cash</option><option>Transfer</option><option>POS</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    {txData.type === 'WITHDRAWAL' && client.balance < txData.amount && (
+                                        <div className="p-3 bg-red-50 text-red-600 text-xs rounded-lg font-bold">
+                                            Warning: Insufficient Funds (Bal: {formatMoney(client.balance)})
+                                        </div>
+                                    )}
+
+                                    <div className="flex gap-3 pt-4">
+                                        <button type="button" onClick={() => setShowTxForm(false)} className="flex-1 py-3 text-slate-500 hover:bg-slate-50 rounded-lg font-bold">Cancel</button>
+                                        <button className={`flex-1 py-3 text-white rounded-lg font-bold shadow-lg ${txData.type === 'DEPOSIT' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'}`}>Confirm</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const NotificationToast = ({ message, onClose }) => (
+            <div className="fixed bottom-6 right-6 bg-slate-900 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-4 animate-bounce-in z-50">
+                <div className="bg-emerald-500 rounded-full p-1"><i data-lucide="check" className="w-4 h-4"></i></div>
+                <div>
+                    <h4 className="font-bold text-sm">Notification Sent</h4>
+                    <p className="text-xs text-slate-300">{message}</p>
+                </div>
+                <button onClick={onClose} className="ml-2 text-slate-500 hover:text-white"><i data-lucide="x" className="w-4 h-4"></i></button>
+            </div>
+        );
+
+        // 5. MAIN APP LOGIC & STATE
+        const App = () => {
+            const [session, setSession] = useState('auth');
+            const [appData, setAppData] = useState({ adminPin: null });
+            const [clients, setClients] = useState([]);
+            const [transactions, setTransactions] = useState([]);
+            const [view, setView] = useState('dashboard');
+            const [selectedClientId, setSelectedClientId] = useState(null);
+            const [notification, setNotification] = useState(null);
+
+            useEffect(() => {
+                setAppData(DataService.loadApp());
+                setClients(DataService.loadClients());
+                setTransactions(DataService.loadTransactions());
+            }, []);
+
+            useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            }, [session, view, clients, selectedClientId]);
+
+            // Handlers
+            const handleLogin = (pin) => {
+                if (pin === appData.adminPin) setSession('app');
+                else alert("Invalid PIN");
+            };
+
+            const handleSetup = (pin) => {
+                const newData = { ...appData, adminPin: pin };
+                setAppData(newData);
+                DataService.saveApp(newData);
+                setSession('app');
+            };
+
+            const addClient = (client) => {
+                const updated = [client, ...clients];
+                setClients(updated);
+                DataService.saveClients(updated);
+            };
+
+            const handleTransaction = (tx) => {
+                // 1. Save Transaction
+                const newTxs = [tx, ...transactions];
+                setTransactions(newTxs);
+                DataService.saveTransactions(newTxs);
+
+                // 2. Update Balance
+                const updatedClients = clients.map(c => {
+                    if (c.id === tx.clientId) {
+                        const newBal = tx.type === 'DEPOSIT' ? (c.balance + tx.amount) : (c.balance - tx.amount);
+                        return { ...c, balance: newBal };
+                    }
+                    return c;
+                });
+                setClients(updatedClients);
+                DataService.saveClients(updatedClients);
+
+                // 3. Simulate Notification
+                const client = clients.find(c => c.id === tx.clientId);
+                const msg = `SMS/Email sent to ${client.name}: ${tx.type} of ${formatMoney(tx.amount)} successful. Bal: ${formatMoney(tx.type === 'DEPOSIT' ? client.balance + tx.amount : client.balance - tx.amount)}`;
+                setNotification(msg);
+                setTimeout(() => setNotification(null), 5000);
+            };
+
+            // Session Check
+            if (session === 'auth') return <AuthScreen onLogin={handleLogin} onSetup={handleSetup} hasAccount={!!appData.adminPin} />;
+
+            // Routing
+            let content;
+            if (view === 'dashboard') content = <DashboardHome clients={clients} transactions={transactions} />;
+            if (view === 'clients') content = <ClientManager clients={clients} onAddClient={addClient} onSelectClient={(id) => { setSelectedClientId(id); setView('client-detail'); }} />;
+
+            if (view === 'client-detail') {
+                const client = clients.find(c => c.id === selectedClientId);
+                if (client) {
+                    content = <ClientDetail client={client} transactions={transactions} onBack={() => setView('clients')} onTransaction={handleTransaction} />;
+                } else {
+                    setView('clients'); // Fallback
+                }
+            }
+
+            if (view === 'transactions') {
+                const sortedTx = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
+                content = (
+                    <div className="space-y-6">
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-2xl font-bold text-slate-800">All Transactions</h2>
+                            <div className="bg-white px-4 py-2 rounded-lg border text-sm font-medium text-slate-500">
+                                Total Volume: {formatMoney(sortedTx.reduce((sum, t) => sum + t.amount, 0))}
+                            </div>
+                        </div>
+                        <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-100">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-slate-50 text-slate-500 font-medium border-b">
+                                    <tr>
+                                        <th className="p-4">Date</th>
+                                        <th className="p-4">Client</th>
+                                        <th className="p-4">Type</th>
+                                        <th className="p-4">Method</th>
+                                        <th className="p-4 text-right">Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {sortedTx.map(t => {
+                                        const client = clients.find(c => c.id === t.clientId);
+                                        return (
+                                            <tr key={t.id} className="hover:bg-slate-50 transition">
+                                                <td className="p-4 text-slate-500">{t.date}</td>
+                                                <td className="p-4 font-medium text-slate-900">{client ? client.name : 'Unknown Client'}</td>
+                                                <td className="p-4">
+                                                    <span className={`px-2 py-1 rounded text-xs font-bold ${t.type === 'DEPOSIT' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                                                        {t.type}
+                                                    </span>
+                                                </td>
+                                                <td className="p-4 text-slate-600">{t.method}</td>
+                                                <td className={`p-4 text-right font-bold ${t.type === 'DEPOSIT' ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                    {t.type === 'DEPOSIT' ? '+' : '-'}{formatMoney(t.amount)}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                    {sortedTx.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">No transactions found.</td></tr>}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            }
+            if (view === 'reports') content = <div className="p-8 text-center text-slate-500">Global Reports Module - Coming in v2</div>;
+
+            return (
+                <Layout onViewChange={setView} currentView={view} onLogout={() => setSession('auth')}>
+                    {content}
+                    {notification && <NotificationToast message={notification} onClose={() => setNotification(null)} />}
+                </Layout>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>

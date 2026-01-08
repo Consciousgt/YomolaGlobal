@@ -85,8 +85,43 @@
             loadTransactions: () => JSON.parse(localStorage.getItem(TRANSACTIONS_KEY)) || [],
             saveTransactions: (data) => localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(data)),
 
-            loadApp: () => JSON.parse(localStorage.getItem(APP_KEY)) || { adminPin: null, businessName: 'Yomola Global' },
+            loadApp: () => {
+                const data = JSON.parse(localStorage.getItem(APP_KEY)) || { staff: [], businessName: 'Yomola Global' };
+                // Migration: If old string PIN exists or no staff, create default admin
+                if (!data.staff || data.staff.length === 0) {
+                    if (data.adminPin) { // Migrate old single PIN
+                        data.staff = [{ id: 1, name: 'Admin', pin: data.adminPin, role: 'admin' }];
+                        delete data.adminPin;
+                    } else {
+                        // Brand new setup handled in AuthScreen
+                    }
+                }
+                return data;
+            },
             saveApp: (data) => localStorage.setItem(APP_KEY, JSON.stringify(data)),
+
+            // Enterprise: Backup/Restore
+            exportData: () => {
+                const dump = {
+                    clients: JSON.parse(localStorage.getItem(CLIENTS_KEY)),
+                    transactions: JSON.parse(localStorage.getItem(TRANSACTIONS_KEY)),
+                    app: JSON.parse(localStorage.getItem(APP_KEY)),
+                    timestamp: new Date().toISOString()
+                };
+                return JSON.stringify(dump, null, 2);
+            },
+            importData: (jsonString) => {
+                try {
+                    const dump = JSON.parse(jsonString);
+                    if (dump.clients) localStorage.setItem(CLIENTS_KEY, JSON.stringify(dump.clients));
+                    if (dump.transactions) localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(dump.transactions));
+                    if (dump.app) localStorage.setItem(APP_KEY, JSON.stringify(dump.app));
+                    return true;
+                } catch (e) {
+                    console.error("Import Failed", e);
+                    return false;
+                }
+            }
         };
 
         // --- UTILS ---
@@ -118,7 +153,7 @@
                         </div>
                         <form onSubmit={handleSubmit} className="space-y-6">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">{hasAccount ? 'Enter Access PIN' : 'Create Admin PIN'}</label>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">{hasAccount ? 'Enter Access PIN' : 'Create Master Admin PIN'}</label>
                                 <input type="password" value={pin} onChange={e => { setPin(e.target.value.replace(/\D/g, '')); setError(''); }} className="w-full text-center text-3xl p-4 border rounded-xl focus:ring-2 focus:ring-brand-500 outline-none tracking-[1em] font-mono" placeholder="••••" autoFocus />
                                 {error && <p className="text-red-500 text-sm text-center mt-2">{error}</p>}
                             </div>
@@ -130,14 +165,29 @@
         };
 
         // 2. DASHBOARD LAYOUT
-        const Layout = ({ children, onViewChange, currentView, onLogout }) => {
+        const Layout = ({ children, onViewChange, currentView, onLogout, currentUser }) => {
+            const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
             return (
                 <div className="flex h-screen bg-slate-50 text-slate-800">
+                    {/* Mobile Overlay */}
+                    {isMobileMenuOpen && (
+                        <div
+                            className="fixed inset-0 bg-black/50 z-20 md:hidden"
+                            onClick={() => setIsMobileMenuOpen(false)}
+                        ></div>
+                    )}
+
                     {/* Sidebar */}
-                    <aside className="w-64 bg-brand-900 text-white flex flex-col hidden md:flex">
-                        <div className="p-6 border-b border-brand-800">
-                            <h2 className="text-xl font-bold tracking-wide">Yomola Global</h2>
-                            <p className="text-xs text-brand-400 mt-1">Contribution Agency</p>
+                    <aside className={`fixed inset-y-0 left-0 z-30 w-64 bg-brand-900 text-white flex flex-col transition-transform duration-300 md:translate-x-0 md:static ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                        <div className="p-6 border-b border-brand-800 flex justify-between items-center">
+                            <div>
+                                <h2 className="text-xl font-bold tracking-wide">Yomola Global</h2>
+                                <p className="text-xs text-brand-400 mt-1">Contribution Agency</p>
+                            </div>
+                            <button onClick={() => setIsMobileMenuOpen(false)} className="md:hidden text-brand-300 hover:text-white">
+                                <i data-lucide="x" className="w-6 h-6"></i>
+                            </button>
                         </div>
                         <nav className="flex-1 p-4 space-y-2">
                             {[
@@ -145,14 +195,23 @@
                                 { id: 'clients', label: 'Clients', icon: 'users' },
                                 { id: 'transactions', label: 'Transactions', icon: 'arrow-right-left' },
                                 { id: 'reports', label: 'Reports', icon: 'file-bar-chart' },
+                                { id: 'settings', label: 'Settings', icon: 'settings' },
                             ].map(item => (
-                                <button key={item.id} onClick={() => onViewChange(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition ${currentView === item.id ? 'bg-brand-700 text-white shadow-lg' : 'text-brand-100 hover:bg-brand-800'}`}>
+                                <button
+                                    key={item.id}
+                                    onClick={() => { onViewChange(item.id); setIsMobileMenuOpen(false); }}
+                                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition ${currentView === item.id ? 'bg-brand-700 text-white shadow-lg' : 'text-brand-100 hover:bg-brand-800'}`}
+                                >
                                     <i data-lucide={item.icon} className="w-5 h-5"></i>
                                     <span className="font-medium">{item.label}</span>
                                 </button>
                             ))}
                         </nav>
                         <div className="p-4 border-t border-brand-800">
+                            <div className="mb-4 px-2">
+                                <div className="text-xs text-brand-400 uppercase font-bold">Logged in as</div>
+                                <div className="font-bold text-white truncate">{currentUser?.name || 'Admin'}</div>
+                            </div>
                             <button onClick={onLogout} className="w-full flex items-center gap-2 px-4 py-2 text-brand-300 hover:text-white transition">
                                 <i data-lucide="log-out" className="w-5 h-5"></i> Logout
                             </button>
@@ -160,21 +219,114 @@
                     </aside>
 
                     {/* Main Content */}
-                    <main className="flex-1 flex flex-col h-full overflow-hidden">
-                        <header className="bg-white px-8 py-4 shadow-sm z-10 flex justify-between items-center">
+                    <main className="flex-1 flex flex-col h-full overflow-hidden w-full">
+                        <header className="bg-white px-4 md:px-8 py-4 shadow-sm z-10 flex justify-between items-center">
                             <div className="flex items-center gap-4">
-                                <button className="md:hidden p-2 text-slate-600"><i data-lucide="menu"></i></button>
-                                <h2 className="text-xl font-bold text-slate-800 capitalize">{currentView}</h2>
+                                <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 text-slate-600 hover:bg-slate-100 rounded-lg">
+                                    <i data-lucide="menu" className="w-6 h-6"></i>
+                                </button>
+                                <h2 className="text-xl font-bold text-slate-800 capitalize hidden md:block">{currentView}</h2>
                             </div>
                             <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-full bg-brand-100 text-brand-600 flex items-center justify-center font-bold">A</div>
-                                <span className="text-sm font-medium">Admin</span>
+                                <div className="hidden md:block text-right">
+                                    <p className="text-sm font-bold text-slate-700">{currentUser?.name}</p>
+                                    <p className="text-xs text-slate-500 uppercase">{currentUser?.role || 'Staff'}</p>
+                                </div>
+                                <div className="w-10 h-10 rounded-full bg-brand-100 text-brand-600 flex items-center justify-center font-bold text-lg border-2 border-brand-50">
+                                    {currentUser?.name?.charAt(0) || 'A'}
+                                </div>
                             </div>
                         </header>
-                        <div className="flex-1 overflow-auto p-8">
+                        <div className="flex-1 overflow-auto p-4 md:p-8">
                             {children}
                         </div>
                     </main>
+                </div>
+            );
+        };
+
+        // 3. FEATURE VIEWS
+
+        const Settings = ({ appData, onAddStaff, onDeleteStaff }) => {
+            const [newStaff, setNewStaff] = useState({ name: '', pin: '', role: 'staff' });
+
+            const handleBackup = () => {
+                const data = DataService.exportData();
+                const blob = new Blob([data], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `yomola_backup_${new Date().toISOString().slice(0, 10)}.json`;
+                a.click();
+            };
+
+            const handleRestore = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const success = DataService.importData(e.target.result);
+                    if (success) {
+                        alert("Restored successfully! The page will reload.");
+                        window.location.reload();
+                    } else {
+                        alert("Failed to restore data. Invalid file.");
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            const handleAdd = (e) => {
+                e.preventDefault();
+                onAddStaff(newStaff);
+                setNewStaff({ name: '', pin: '', role: 'staff' });
+            };
+
+            return (
+                <div className="space-y-6 max-w-4xl">
+                    <div className="bg-white rounded-xl shadow-sm p-6 border border-slate-100">
+                        <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><i data-lucide="database" className="w-5 h-5"></i> Data Management</h3>
+                        <p className="text-sm text-slate-500 mb-4">Export your data to move it to another device, or import a backup file.</p>
+                        <div className="flex gap-4">
+                            <button onClick={handleBackup} className="bg-brand-100 text-brand-700 px-4 py-2 rounded-lg font-bold hover:bg-brand-200 flex items-center gap-2">
+                                <i data-lucide="download" className="w-4 h-4"></i> Export Data
+                            </button>
+                            <label className="bg-slate-100 text-slate-700 px-4 py-2 rounded-lg font-bold hover:bg-slate-200 flex items-center gap-2 cursor-pointer">
+                                <i data-lucide="upload" className="w-4 h-4"></i> Restore Backup
+                                <input type="file" accept=".json" onChange={handleRestore} className="hidden" />
+                            </label>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm p-6 border border-slate-100">
+                        <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><i data-lucide="users" className="w-5 h-5"></i> Staff Management</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div>
+                                <h4 className="font-bold text-sm text-slate-500 uppercase mb-3">Add New Staff</h4>
+                                <form onSubmit={handleAdd} className="space-y-3">
+                                    <input required placeholder="Staff Name" value={newStaff.name} onChange={e => setNewStaff({ ...newStaff, name: e.target.value })} className="w-full border p-2 rounded-lg" />
+                                    <input required placeholder="PIN (4 digits)" maxLength="4" value={newStaff.pin} onChange={e => setNewStaff({ ...newStaff, pin: e.target.value })} className="w-full border p-2 rounded-lg" />
+                                    <button className="w-full bg-brand-600 text-white py-2 rounded-lg font-bold">Add Staff</button>
+                                </form>
+                            </div>
+                            <div>
+                                <h4 className="font-bold text-sm text-slate-500 uppercase mb-3">Existing Accounts</h4>
+                                <div className="space-y-2">
+                                    {appData.staff.map(s => (
+                                        <div key={s.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
+                                            <div>
+                                                <p className="font-bold">{s.name}</p>
+                                                <p className="text-xs text-slate-500">PIN: ****</p>
+                                            </div>
+                                            {s.role !== 'admin' && (
+                                                <button onClick={() => onDeleteStaff(s.id)} className="text-red-500 hover:text-red-700"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             );
         };
@@ -197,8 +349,8 @@
 
             return (
                 <div className="space-y-6">
-                    <div className="flex justify-between items-center">
-                        <div className="relative w-96">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                        <div className="relative w-full md:w-96">
                             <input
                                 type="text"
                                 placeholder="Search clients..."
@@ -208,7 +360,7 @@
                             />
                             <i data-lucide="search" className="absolute left-3 top-2.5 w-4 h-4 text-slate-400"></i>
                         </div>
-                        <button onClick={() => setShowForm(true)} className="bg-brand-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-brand-700 flex items-center gap-2">
+                        <button onClick={() => setShowForm(true)} className="w-full md:w-auto bg-brand-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-brand-700 flex items-center justify-center gap-2">
                             <i data-lucide="user-plus" className="w-4 h-4"></i> Add Client
                         </button>
                     </div>
@@ -216,7 +368,7 @@
                     {/* Add Client Modal */}
                     {showForm && (
                         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6">
+                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 animate-bounce-in">
                                 <div className="flex justify-between items-center mb-6">
                                     <h3 className="text-xl font-bold">Add New Client</h3>
                                     <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600"><i data-lucide="x"></i></button>
@@ -241,8 +393,8 @@
                     )}
 
                     {/* Clients Table */}
-                    <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-100">
-                        <table className="w-full text-left text-sm">
+                    <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-100 overflow-x-auto">
+                        <table className="w-full text-left text-sm min-w-[600px]">
                             <thead className="bg-slate-50 text-slate-500 font-medium">
                                 <tr>
                                     <th className="p-4">Name</th>
@@ -276,8 +428,12 @@
             const stats = useMemo(() => {
                 const totalClients = clients.length;
                 const totalHoldings = clients.reduce((sum, c) => sum + (c.balance || 0), 0);
-                const todaysTx = transactions.filter(t => new Date(t.date).toDateString() === new Date().toDateString());
-                const todaysVolume = todaysTx.reduce((sum, t) => sum + (t.type === 'DEPOSIT' ? t.amount : 0), 0);
+
+                // Enhanced Date Logic for Today's Deposits
+                const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+                const todaysTx = transactions.filter(t => t.date === todayStr && t.type === 'DEPOSIT');
+                const todaysVolume = todaysTx.reduce((sum, t) => sum + t.amount, 0);
+
                 return { totalClients, totalHoldings, todaysVolume };
             }, [clients, transactions]);
 
@@ -494,7 +650,8 @@
         // 5. MAIN APP LOGIC & STATE
         const App = () => {
             const [session, setSession] = useState('auth');
-            const [appData, setAppData] = useState({ adminPin: null });
+            const [currentUser, setCurrentUser] = useState(null); // Multi-User Support
+            const [appData, setAppData] = useState({ staff: [] });
             const [clients, setClients] = useState([]);
             const [transactions, setTransactions] = useState([]);
             const [view, setView] = useState('dashboard');
@@ -513,15 +670,36 @@
 
             // Handlers
             const handleLogin = (pin) => {
-                if (pin === appData.adminPin) setSession('app');
-                else alert("Invalid PIN");
+                const user = appData.staff.find(u => u.pin === pin);
+                if (user) {
+                    setCurrentUser(user);
+                    setSession('app');
+                } else {
+                    alert("Invalid PIN");
+                }
             };
 
             const handleSetup = (pin) => {
-                const newData = { ...appData, adminPin: pin };
+                const newAdmin = { id: 1, name: 'Admin', pin, role: 'admin' };
+                const newData = { ...appData, staff: [newAdmin] };
                 setAppData(newData);
                 DataService.saveApp(newData);
+                setCurrentUser(newAdmin);
                 setSession('app');
+            };
+
+            const handleAddStaff = (staff) => {
+                const newData = { ...appData, staff: [...appData.staff, { ...staff, id: Date.now() }] };
+                setAppData(newData);
+                DataService.saveApp(newData);
+                alert("Staff member created!");
+            };
+
+            const handleDeleteStaff = (id) => {
+                if (!confirm("Are you sure?")) return;
+                const newData = { ...appData, staff: appData.staff.filter(s => s.id !== id) };
+                setAppData(newData);
+                DataService.saveApp(newData);
             };
 
             const addClient = (client) => {
@@ -531,8 +709,11 @@
             };
 
             const handleTransaction = (tx) => {
+                // Enterprise: Audit Trail
+                const stampedTx = { ...tx, processedBy: currentUser?.name || 'Unknown' };
+
                 // 1. Save Transaction
-                const newTxs = [tx, ...transactions];
+                const newTxs = [stampedTx, ...transactions];
                 setTransactions(newTxs);
                 DataService.saveTransactions(newTxs);
 
@@ -555,12 +736,13 @@
             };
 
             // Session Check
-            if (session === 'auth') return <AuthScreen onLogin={handleLogin} onSetup={handleSetup} hasAccount={!!appData.adminPin} />;
+            if (session === 'auth') return <AuthScreen onLogin={handleLogin} onSetup={handleSetup} hasAccount={appData.staff && appData.staff.length > 0} />;
 
             // Routing
             let content;
             if (view === 'dashboard') content = <DashboardHome clients={clients} transactions={transactions} />;
             if (view === 'clients') content = <ClientManager clients={clients} onAddClient={addClient} onSelectClient={(id) => { setSelectedClientId(id); setView('client-detail'); }} />;
+            if (view === 'settings') content = <Settings appData={appData} onAddStaff={handleAddStaff} onDeleteStaff={handleDeleteStaff} />;
 
             if (view === 'client-detail') {
                 const client = clients.find(c => c.id === selectedClientId);
@@ -589,6 +771,7 @@
                                         <th className="p-4">Client</th>
                                         <th className="p-4">Type</th>
                                         <th className="p-4">Method</th>
+                                        <th className="p-4">Processor</th>
                                         <th className="p-4 text-right">Amount</th>
                                     </tr>
                                 </thead>
@@ -605,23 +788,106 @@
                                                     </span>
                                                 </td>
                                                 <td className="p-4 text-slate-600">{t.method}</td>
+                                                <td className="p-4 text-xs font-mono text-slate-500 uppercase">{t.processedBy || 'Admin'}</td>
                                                 <td className={`p-4 text-right font-bold ${t.type === 'DEPOSIT' ? 'text-emerald-600' : 'text-red-600'}`}>
                                                     {t.type === 'DEPOSIT' ? '+' : '-'}{formatMoney(t.amount)}
                                                 </td>
                                             </tr>
                                         );
                                     })}
-                                    {sortedTx.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">No transactions found.</td></tr>}
+                                    {sortedTx.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-slate-400">No transactions found.</td></tr>}
                                 </tbody>
                             </table>
                         </div>
                     </div>
                 );
             }
-            if (view === 'reports') content = <div className="p-8 text-center text-slate-500">Global Reports Module - Coming in v2</div>;
+            if (view === 'reports') {
+                const totalDeps = transactions.filter(t => t.type === 'DEPOSIT').reduce((s, t) => s + t.amount, 0);
+                const totalWith = transactions.filter(t => t.type === 'WITHDRAWAL').reduce((s, t) => s + t.amount, 0);
+                const netGrowth = totalDeps - totalWith;
+
+                // 7-Day Chart Data
+                const today = new Date();
+                const chartData = Array.from({ length: 7 }, (_, i) => {
+                    const d = new Date(today);
+                    d.setDate(today.getDate() - (6 - i));
+                    const dateStr = d.toISOString().slice(0, 10);
+                    const vol = transactions.filter(t => t.date === dateStr && t.type === 'DEPOSIT').reduce((s, t) => s + t.amount, 0);
+                    return { date: dateStr.slice(5), volume: vol };
+                });
+                const maxVol = Math.max(...chartData.map(d => d.volume), 1); // Avoid div by 0
+
+                // Top Clients
+                const topClients = [...clients].sort((a, b) => b.balance - a.balance).slice(0, 5);
+
+                content = (
+                    <div className="space-y-6">
+                        <h2 className="text-2xl font-bold text-slate-800">Agency Reports</h2>
+
+                        {/* Summary Cards */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                                <p className="text-xs font-bold text-slate-500 uppercase">Net Growth</p>
+                                <p className={`text-3xl font-bold mt-2 ${netGrowth >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                    {netGrowth >= 0 ? '+' : ''}{formatMoney(netGrowth)}
+                                </p>
+                            </div>
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                                <p className="text-xs font-bold text-slate-500 uppercase">Total Deposits</p>
+                                <p className="text-3xl font-bold text-slate-800 mt-2">{formatMoney(totalDeps)}</p>
+                            </div>
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                                <p className="text-xs font-bold text-slate-500 uppercase">Total Withdrawals</p>
+                                <p className="text-3xl font-bold text-red-600 mt-2">-{formatMoney(totalWith)}</p>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            {/* Chart */}
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                                <h3 className="font-bold text-lg mb-6">Deposits (Last 7 Days)</h3>
+                                <div className="flex items-end justify-between h-48 gap-2">
+                                    {chartData.map((d, i) => (
+                                        <div key={i} className="flex-1 flex flex-col justify-end items-center group">
+                                            <div
+                                                className="w-full bg-brand-500 rounded-t-lg transition-all duration-500 group-hover:bg-brand-600 relative"
+                                                style={{ height: `${(d.volume / maxVol) * 100}%` }}
+                                            >
+                                                <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition whitespace-nowrap">
+                                                    {formatMoney(d.volume)}
+                                                </div>
+                                            </div>
+                                            <p className="text-xs text-slate-400 mt-2 font-medium">{d.date}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Top Clients */}
+                            <div className="bg-white p-0 rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                                <div className="p-6 border-b border-slate-100">
+                                    <h3 className="font-bold text-lg">Top 5 Savers</h3>
+                                </div>
+                                <table className="w-full text-left text-sm">
+                                    <tbody className="divide-y divide-slate-100">
+                                        {topClients.map((client, i) => (
+                                            <tr key={client.id} className="hover:bg-slate-50">
+                                                <td className="p-4 pl-6 text-slate-400 font-bold w-12 text-center">{i + 1}</td>
+                                                <td className="p-4 font-medium text-slate-900">{client.name}</td>
+                                                <td className="p-4 text-right font-bold text-brand-600">{formatMoney(client.balance)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
 
             return (
-                <Layout onViewChange={setView} currentView={view} onLogout={() => setSession('auth')}>
+                <Layout onViewChange={setView} currentView={view} onLogout={() => setSession('auth')} currentUser={currentUser}>
                     {content}
                     {notification && <NotificationToast message={notification} onClose={() => setNotification(null)} />}
                 </Layout>
